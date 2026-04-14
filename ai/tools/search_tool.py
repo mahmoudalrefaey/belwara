@@ -7,15 +7,20 @@ from app.services.receipt_service import search_receipts
 
 
 def _format_receipts(receipts) -> str:
-    """Serialize a list of Receipt ORM objects to a JSON string."""
+    """Serialize receipts to compact JSON without heavy raw OCR text."""
 
     def receipt_to_dict(receipt):
         if hasattr(receipt, "__table__"):
-            return {c.name: getattr(receipt, c.name) for c in receipt.__table__.columns}
+            # Exclude raw_text to reduce payload size and LLM context cost.
+            return {
+                c.name: getattr(receipt, c.name)
+                for c in receipt.__table__.columns
+                if c.name != "raw_text"
+            }
         return dict(receipt)
 
     data = [receipt_to_dict(r) for r in receipts]
-    return json.dumps(data, ensure_ascii=False, default=str, indent=2)
+    return json.dumps(data, ensure_ascii=False, default=str, separators=(",", ":"))
 
 
 @tool
@@ -32,7 +37,8 @@ def search_tool(query: str, user_id: Optional[int] = None) -> str:
     """
     db = SessionLocal()
     try:
-        receipts, _ = search_receipts(db, query, user_id=user_id)
+        # Skip raw_text matching for chat search to keep queries and payloads lighter.
+        receipts, _ = search_receipts(db, query, user_id=user_id, include_raw=False)
         return _format_receipts(receipts)
     finally:
         db.close()

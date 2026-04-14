@@ -25,7 +25,7 @@ The supervisor will paraphrase your JSON into a user-friendly reply — you do N
 - currency_tool: convert amounts when the user asks or when receipts contain mixed
   currencies. Always include both original and converted values in your JSON output.
 - search_tool: search this user's saved receipts in the database (merchant names,
-  line items, currency, raw OCR text). Use it to pull extra matching receipts when
+  line items, currency). Use it to pull extra matching receipts when
   the provided rows are not enough. Results are receipt records, not external prices.
 
 == ANALYSIS STEPS ==
