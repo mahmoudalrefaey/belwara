@@ -1,349 +1,375 @@
 # SpendHiST
 
-SpendHiST is an AI-powered receipt management and spending analytics platform with:
+SpendHiST turns photos and PDFs of receipts into structured spending history, then lets you explore that history on a dashboard or by asking questions in English or Arabic.
 
-- **FastAPI backend** (OCR, parsing, PostgreSQL storage, JWT auth, LangGraph chat)
-- **Next.js frontend** (dashboard, receipts, chat, profile, auth)
-
-It supports multi-user receipt ingestion (images/PDF), searchable receipt history, and conversational spending insights.
-
-> **Project Status:** This repository is currently in the **production hardening stage**.  
-> The current public setup should be treated as a **demo / evaluation build** for anyone who wants to try the system.
+- **Backend:** FastAPI, PostgreSQL, Azure OpenAI, Azure Blob Storage.
+- **Frontend:** Next.js (App Router), TanStack Query, Tailwind and shadcn/ui.
 
 ---
 
-## Table of Contents
+## Contents
 
-- [Architecture](#architecture)
-- [Core Features](#core-features)
-- [Tech Stack](#tech-stack)
-- [Repository Structure](#repository-structure)
-- [Requirements](#requirements)
-- [Environment Variables](#environment-variables)
-- [Backend Setup and Run](#backend-setup-and-run)
-- [Frontend Setup and Run](#frontend-setup-and-run)
-- [API Overview](#api-overview)
-- [Authentication Flow](#authentication-flow)
-- [Chat Pipeline](#chat-pipeline)
-- [Performance and Timeout Notes](#performance-and-timeout-notes)
-- [Troubleshooting](#troubleshooting)
-- [Production Recommendations](#production-recommendations)
-
----
-
-## Architecture
-
-### Backend (FastAPI)
-
-1. User uploads receipt files (`/receipts/upload`)
-2. OCR extracts raw text
-3. Parser extracts structured fields (merchant, date, totals, items, currency)
-4. Data is stored in PostgreSQL (`receipt`, `receipt_items`)
-5. Chat endpoint (`/chat`) runs through LangGraph supervisor:
-  - routes tasks to SQL agent when DB lookup is needed
-  - routes to analyst agent for structured analysis
-  - returns a final natural-language answer
-
-### LLM Provider Base URL
-
-All backend LLM calls use a **G0I OpenAI-compatible gateway**:
-
-- **Base URL:** `https://g0i.shop/v1`
-- Used by parser and agent models (`PARSER_MODEL`, `SQL_MODEL`, `AGENTIC_MODEL`)
-- Authenticated with `G0I_API_KEY`
-
-### Frontend (Next.js App Router)
-
-- Protected application routes
-- React Query data fetching and caching
-- Receipts list/search/upload/detail/delete
-- Dashboard visualizations with Recharts
-- Chat UI with persisted `thread_id`
-- Profile + local preferences (currency/theme)
+1. [How it works](#how-it-works)
+2. [Receipt lifecycle](#receipt-lifecycle)
+3. [The spending assistant](#the-spending-assistant)
+4. [Dashboard](#dashboard)
+5. [Plans, quotas and cost tracking](#plans-quotas-and-cost-tracking)
+6. [Data model](#data-model)
+7. [Security model](#security-model)
+8. [Repository structure](#repository-structure)
+9. [Local setup](#local-setup)
+10. [Configuration](#configuration)
+11. [API reference](#api-reference)
+12. [Testing and accuracy evaluation](#testing-and-accuracy-evaluation)
+13. [Deploying to Azure](#deploying-to-azure)
+14. [Design decisions](#design-decisions)
+15. [Roadmap](#roadmap)
 
 ---
 
-## Core Features
+## How it works
 
-- OCR for image and PDF receipts
-- Multi-language parser routing (English/Arabic workflows)
-- JWT authentication and user-scoped access control
-- Receipt CRUD, pagination, and search
-- AI chat over user spending data
-- Currency conversion tool integration
-- Optional per-route rate limiting
-- Frontend dark mode and responsive layout
+There are three user-facing flows. They share one PostgreSQL database and one Azure OpenAI client.
 
----
+```
+                        ┌───────────────────────────── Next.js frontend ─────────────────────────────┐
+                        │  Dashboard      Receipts (upload, review, edit)      Chat      Profile     │
+                        └───────┬───────────────────┬──────────────────────────┬───────────────┬─────┘
+                                │ JWT               │                          │               │
+                        ┌───────▼───────────────────▼──────────────────────────▼───────────────▼─────┐
+                        │                              FastAPI                                       │
+                        │  upload_service   extract_service   receipt_service   chat_service  quota  │
+                        └───┬──────────────────┬───────────────────┬──────────────────┬──────────────┘
+                            │                  │                   │                  │
+                     Azure Blob Storage   Azure OpenAI        PostgreSQL        Azure OpenAI
+                     (original files)     (vision, 1 call)    (all data)        (chat + tools)
+```
 
-## Tech Stack
-
-### Backend
-
-- Python 3.11/3.12
-- FastAPI
-- SQLAlchemy 2.x + PostgreSQL
-- Alembic
-- LangChain + LangGraph + langgraph-supervisor
-- Transformers + PyTorch
-- slowapi (rate limiting)
-- uv (dependency/runtime tooling)
-
-### Frontend
-
-- Next.js 16 (App Router) + React 19
-- TypeScript
-- Tailwind CSS v4
-- shadcn/ui (Base UI)
-- TanStack Query v5
-- Axios
-- Recharts
-- React Hook Form + Zod
-- Sonner + Framer Motion + next-themes
+| Flow | In one sentence |
+|---|---|
+| **Capture** | Upload a file, store it, and extract merchant, date, items and totals with one vision-model call, in the background. |
+| **Review** | Anything doubtful is flagged "needs review". The user sees the original beside the extracted data and corrects it. |
+| **Insight** | A dashboard and a chat assistant answer from the data. Every number is computed by SQL, never by the model. |
 
 ---
 
-## Repository Structure
+## Receipt lifecycle
+
+```
+POST /receipts/upload
+        │  validate type and size, check monthly quota
+        ▼
+  file saved to storage  ──▶  receipt row created: status = processing  ──▶  HTTP 202 returned
+                                        │
+                                        │  background task (FastAPI BackgroundTasks)
+                                        ▼
+                      load file ─▶ prepare pages ─▶ ONE vision call (structured output)
+                                        │
+                                        ▼
+                         deterministic checks (build_receipt_data)
+                         ┌──────────────┴──────────────┐
+                    no problems                  one or more reasons
+                         │                              │
+                  status = ready              status = needs_review
+                                                  (review_reasons lists why)
+
+   model error / unreadable file / not a receipt  ──▶  status = failed (reason stored)
+```
+
+### Extraction (`app/services/extract_service.py`)
+
+1. **Prepare the file.** Images are corrected for EXIF rotation, downscaled to at most 2048 px on the long side and re-encoded as JPEG. PDFs are rendered page by page at 200 dpi (at most `MAX_PDF_PAGES`, default 5).
+2. **One model call.** All pages go in a single message at `detail: "high"`. The model returns the `ExtractedReceipt` schema through Azure's structured output, so the reply is always valid JSON that matches the schema. No fence stripping, no repair call.
+3. **The schema** holds: a full transcription (`raw_text`), `is_receipt`, merchant, date, currency (a fixed list of ISO codes), category, line items, subtotal, taxes and tax rate, other charges (tips, service, delivery), total, and the separate fields `amount_paid` and `change_due`.
+   - Keeping paid and change apart from the total is the main defence against the classic mistake of reading the cash handed over as the bill.
+   - `raw_text` is declared first, so the model transcribes the receipt before filling in fields.
+
+### Deterministic checks (`build_receipt_data`)
+
+These run in plain Python after the model call. Most of them only flag a problem. The only automatic correction is the paid/change rule below.
+
+| Check | Result |
+|---|---|
+| `total == amount_paid` while `change_due > 0` (or total missing) | **Fixed:** `total = amount_paid − change_due` |
+| Missing merchant, date, total or currency | flag `missing_<field>` |
+| Total is zero or negative | flag `invalid_total` |
+| Date more than a day in the future, or older than 2 years | flag `date_in_future`, `date_too_old` |
+| Sum of item totals matches neither the total, the total minus tax and charges, nor the subtotal (2% tolerance) | flag `items_sum_mismatch` |
+| Another non-failed receipt with the same merchant, date and total | flag `possible_duplicate` |
+| Model says it isn't a receipt | status `failed`, reason `not_a_receipt` |
+
+Missing unit or line prices are filled from quantity. Per-item tax is `line_total × tax_rate / 100` when a rate was printed.
+
+### Recovery and corrections
+
+- **A receipt is never discarded** because extraction was imperfect. It is saved, flagged, and the user decides.
+- `PATCH /receipts/{id}` applies the user's corrections and sets the status to `ready` (merchant, date, total and currency must all be present).
+- `POST /receipts/{id}/reprocess` re-runs extraction on a `failed` or `needs_review` receipt, for example after a prompt or model improvement.
+- **Restart safety.** At startup the API re-claims receipts stuck in `processing` for more than 10 minutes. The claim is a single `UPDATE … RETURNING` that bumps `updated_at`, so two replicas never process the same receipt.
+
+---
+
+## The spending assistant
+
+```
+user message
+     │
+     ▼
+ load last 20 messages of this thread (DB) + system prompt (today's date, main currency)
+     │
+     ▼
+ ┌─ model call ──────────────────────────────┐
+ │   wants data?  ──yes──▶ run tool(s) in SQL ──▶ feed JSON results back ─┐
+ │        │ no                                                            │
+ │        ▼                                  (at most 4 steps; the last step has tools disabled)
+ │   final answer ◀──────────────────────────────────────────────────────┘
+ └───────────────────────────────────────────┘
+     │
+     ▼
+ save user + assistant messages ─▶ return {reply, thread_id}
+```
+
+### Tools
+
+| Tool | Arguments the model can set | Returns |
+|---|---|---|
+| `spending_summary` | start, end, group_by (merchant / month / category / none), merchant, category | total, receipt count and average, **per currency** |
+| `list_receipts` | start, end, merchant, category, limit | receipts with merchant, date, total, currency, status |
+| `list_items` | query, merchant, start, end, limit | purchased items with quantity and prices |
+| `convert_currency` | amount, from, to | converted amount and rate date (rates cached 1 hour) |
+
+### Why it's accurate and safe
+
+- **The model never calculates and never writes SQL.** It picks a tool and fills typed arguments. Every figure in an answer comes from a tool result.
+- **`user_id` is not an argument.** Tools are closures built per request (`build_tools(db, user_id)`), so a prompt-injected "show me user 2's data" cannot change who is queried.
+- Tool schemas are `strict`: the model's arguments always validate.
+- Only `ready` and `needs_review` receipts count in totals. `processing` and `failed` receipts are excluded.
+- Currencies are never mixed. The assistant is told to report each currency separately or to call `convert_currency`.
+- A tool error is returned to the model as `{"error": …}`, and the database session is rolled back so one failure can't poison the rest of the turn.
+
+### History
+
+Conversations live in `chat_messages` (user, thread, role, content). The frontend keeps only the current `thread_id`, so history survives restarts and devices. `GET /chat/threads` lists conversations for a history screen.
+
+---
+
+## Dashboard
+
+`GET /receipts/dashboard?currency=EGP` computes everything in SQL for **one currency at a time**: total, receipt count, average, this month, last 12 months, top 5 merchants, spend by category, and how many receipts need review. If the requested currency is missing, the server falls back to the user's most-used one. The frontend shows a currency switcher when there is more than one currency, and a banner linking to receipts that need review.
+
+---
+
+## Plans, quotas and cost tracking
+
+- Every model call writes an `llm_usage` row: user, kind (`receipt` or `chat`), deployment, input and output tokens. Summing it gives cost per user.
+- Each user has a `plan` (`free` or `pro`). Monthly limits are in `PLAN_LIMITS` (config): defaults are free = 30 receipts and 50 chat messages, pro = 500 and 2000. `0` means unlimited.
+- Going over a limit returns **HTTP 402** with the plan, used and limit. The upload quota is checked for the whole batch before anything is stored.
+- `GET /users/me/usage` powers the usage bars on the profile page.
+- **Not built yet:** taking payments and flipping `plan` to `pro`. See the [roadmap](#roadmap).
+- IP rate limits (slowapi) still protect register, login, upload and chat from bursts.
+
+---
+
+## Data model
+
+```
+users ──< receipt ──< receipt_items
+  │
+  ├──< chat_messages        (user_id, thread_id, role, content)
+  └──< llm_usage            (user_id, kind, deployment, input_tokens, output_tokens)
+```
+
+All child tables use `ON DELETE CASCADE`, so deleting a user removes everything they own.
+
+**`receipt`** key columns:
+
+| Column | Notes |
+|---|---|
+| `status` | `processing`, `ready`, `needs_review`, `failed` |
+| `review_reasons` | JSON list of reason codes (or an extraction error message) |
+| `merchant_name`, `receipt_date`, `total_amount`, `currency` | Nullable, because they are unknown while processing |
+| `total_taxes`, `other` | Never null; default 0 |
+| `category` | groceries, dining, transport, shopping, bills, health, entertainment, other |
+| `raw_text` | The model's transcription; used by search |
+| `image_key` | Storage key of the original: `{user_id}/{uuid}{ext}` |
+| `updated_at` | Used to detect stuck jobs |
+
+Indexes: `(user_id, receipt_date)` for date-range queries, `status`, `receipt_items(receipt_id)`, `chat_messages(user_id, thread_id, id)`, `llm_usage(user_id, created_at)`.
+
+---
+
+## Security model
+
+| Concern | How it's handled |
+|---|---|
+| Data isolation | Every service function takes a required `user_id`; every query filters on it. The chat model can't set it. |
+| Authentication | bcrypt (SHA-256 pre-hash to avoid the 72-byte limit); JWT bearer tokens; inactive accounts can't log in |
+| Brute force | Rate limits on register, login, upload and chat |
+| Uploads | Allow-listed extensions, size cap (15 MiB), file-count cap (10), PDF page cap; files that can't be decoded fail cleanly |
+| Files | Stored under the owner's prefix and served only through an authenticated owner check |
+| Secrets | Azure access via managed identity; no key needed in production |
+| Privacy | `GET /users/me/export` (JSON of everything stored) and `DELETE /users/me` (password required; removes rows and stored files) |
+
+---
+
+## Repository structure
 
 ```text
-SpendHiST/
-├── app/                         # FastAPI backend
-│   ├── api/v1/                  # users, receipts, chat routes
-│   ├── core/                    # security, db, deps, rate limit
-│   ├── models/                  # SQLAlchemy models
-│   ├── schemas/                 # Pydantic contracts
-│   ├── services/                # business logic (chat/upload/receipts/users)
-│   ├── ocr/                     # OCR engine
-│   └── parser/                  # parsing pipeline
-├── ai/
-│   ├── agents/                  # supervisor, sql_agent, receipt_analyst
-│   └── tools/                   # db/search/currency tools
-├── spendhist-frontend/          # Next.js frontend
-├── alembic/                     # migrations
-├── alembic.ini
-├── pyproject.toml
-├── uv.lock
-└── README.md
+app/
+├── main.py              app setup, CORS, health check, restart recovery, telemetry
+├── config.py            all settings, read once from .env
+├── api/v1/              users.py, receipts.py, chat.py (thin HTTP layer)
+├── core/                database, auth dependencies, JWT/password, rate limits, llm.py (Azure client)
+├── models/              users, receipt (+items), chat_messages, llm_usage
+├── schemas/             Pydantic request/response contracts
+└── services/
+    ├── extract_service.py   image/PDF prep, the vision call, deterministic checks
+    ├── upload_service.py    accept uploads, background pipeline, stale-job recovery
+    ├── receipt_service.py   queries, search, aggregates, dashboard
+    ├── chat_service.py      the model ⇄ tools loop and history
+    ├── chat_tools.py        tool schemas and per-user tool binding
+    ├── quota_service.py     monthly plan limits
+    ├── storage_service.py   Azure Blob or local folder
+    └── user_service.py      accounts, export, deletion
+alembic/versions/001_baseline.py   full schema
+evals/                accuracy evaluation scripts
+tests/                unit and integration tests
+spendhist-frontend/   Next.js app
+Dockerfile · .github/workflows/ci.yml
 ```
 
 ---
 
-## Requirements
+## Local setup
 
-- Python 3.11 or 3.12
-- Node.js 20+ (recommended) and npm
-- PostgreSQL
-- `uv` installed
-- API keys for:
-  - G0I OpenAI-compatible gateway (`G0I_API_KEY`)
-  - CurrencyFreaks (`CURRENCYFREAKS_API_KEY`)
-- Optional:
-  - CUDA-capable GPU for faster OCR
-  - Hugging Face token for gated models
-
----
-
-## Environment Variables
-
-Create `.env` in project root (backend), based on `.env.example`.
-
-### Required (backend startup fails if missing)
-
-```env
-DATABASE_URL=postgresql://user:pass@localhost:5432/spendhist
-
-MODEL_NAME_OCR=your_hf_ocr_model
-PARSER_MODEL=your_parser_model
-SQL_MODEL=your_sql_agent_model
-AGENTIC_MODEL=your_supervisor_analyst_model
-
-G0I_API_KEY=your_gateway_key
-CURRENCYFREAKS_API_KEY=your_currencyfreaks_key
-```
-
-> Note: model requests are sent through the fixed gateway base URL `https://g0i.shop/v1`.
-
-### Auth and API behavior
-
-```env
-JWT_SECRET_KEY=strong_random_secret
-JWT_ALGORITHM=HS256
-JWT_EXPIRE_MINUTES=1440
-```
-
-### Useful tuning knobs
-
-- `DB_POOL_SIZE`, `DB_POOL_MAX_OVERFLOW`
-- `DB_TOOL_MAX_LIMIT`, `DB_TOOL_MAX_JSON_BYTES`, `DB_TOOL_STATEMENT_TIMEOUT_MS`
-- `MAX_UPLOAD_BYTES`, `MAX_PDF_PAGES`
-- `DEFAULT_RECEIPT_PAGE_SIZE`, `MAX_RECEIPT_PAGE_SIZE`, `SEARCH_RESULTS_CAP`
-- `RATE_LIMIT_*_PER_MINUTE`
-- `CORS_ORIGINS`
-
-Frontend env (`spendhist-frontend/.env.local`):
-
-```env
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
-```
-
----
-
-## Backend Setup and Run
-
-### 1) Install dependencies
+**Requirements:** Python 3.11 or 3.12 and [`uv`](https://docs.astral.sh/uv/), Node.js 20+, PostgreSQL 15+, and an Azure OpenAI deployment of a model that supports **vision, structured outputs and tool calling** (one deployment can serve both receipts and chat).
 
 ```bash
+cp .env.example .env              # fill in the values (see Configuration)
 uv sync
-```
-
-### 2) Prepare database
-
-Run migrations:
-
-```bash
-uv run alembic upgrade head
-```
-
-### 3) Start API server
-
-```bash
+uv run alembic upgrade head       # creates the schema
 uv run uvicorn app.main:app --reload
+# API docs: http://127.0.0.1:8000/docs
 ```
-
-Backend endpoints:
-
-- API docs: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
-- OpenAPI: [http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json)
-
----
-
-## Frontend Setup and Run
 
 ```bash
 cd spendhist-frontend
+echo "NEXT_PUBLIC_API_URL=http://127.0.0.1:8000" > .env.local
 npm install
-npm run dev
+npm run dev                       # http://localhost:3000
 ```
 
-Open: [http://localhost:3000](http://localhost:3000)
+With no `AZURE_STORAGE_*` set, uploads are stored in `RECEIPTS_IMG_DIR` (default `receipts_img/`).
 
-Build for production:
+---
+
+## Configuration
+
+| Variable | Required | Notes |
+|---|---|---|
+| `DATABASE_URL` | yes | PostgreSQL URL |
+| `JWT_SECRET_KEY` | yes | Long random string |
+| `AZURE_OPENAI_ENDPOINT` | yes | `https://<resource>.openai.azure.com` (without `/openai/v1`) |
+| `RECEIPT_DEPLOYMENT`, `CHAT_DEPLOYMENT` | yes | Azure **deployment** names (not model names) |
+| `AZURE_OPENAI_API_KEY` | no | If empty, the app signs in with its managed identity |
+| `AZURE_STORAGE_ACCOUNT_URL` | no | Blob storage with managed identity (production) |
+| `AZURE_STORAGE_CONNECTION_STRING` | no | Blob storage with a connection string (e.g. Azurite) |
+| `AZURE_STORAGE_CONTAINER` | no | Default `receipts` |
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | no | Enables request, SQL and log telemetry |
+| `CURRENCYFREAKS_API_KEY` | no | Enables currency conversion in chat |
+| `CORS_ORIGINS` | no | Comma-separated frontend origins; empty allows all without credentials |
+
+Tuning: `MAX_UPLOAD_BYTES`, `MAX_FILES_PER_UPLOAD`, `MAX_PDF_PAGES`, `LLM_TIMEOUT_SECONDS`, `LLM_MAX_RETRIES`, `CHAT_HISTORY_MESSAGES`, `CHAT_MAX_TOOL_STEPS`, `FREE_*`/`PRO_*` quota variables, `RATE_LIMIT_*_PER_MINUTE`, `DB_POOL_SIZE`, `DB_POOL_MAX_OVERFLOW`.
+
+---
+
+## API reference
+
+All routes except register, login and `/health` need `Authorization: Bearer <token>`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/users/register`, `/users/login` | Create an account; get a JWT |
+| GET | `/users/{id}` | Own profile only (others return 404) |
+| GET | `/users/me/usage` | This month's usage vs plan limits |
+| GET | `/users/me/export` | Download all your data as JSON |
+| DELETE | `/users/me` | Delete the account (body: `{password}`) |
+| POST | `/receipts/upload` | Multipart `files`; returns **202** with `processing` receipts |
+| GET | `/receipts` | Paginated list; filters `status`, `start`, `end`, `merchant`, `category` |
+| GET | `/receipts/search?q=` | Search merchant, items, currency and receipt text |
+| GET | `/receipts/dashboard?currency=` | Dashboard numbers for one currency |
+| POST | `/receipts` | Manual entry (all core fields required) |
+| GET / PATCH / DELETE | `/receipts/{id}` | Detail / correct (sets `ready`) / delete (also deletes the file) |
+| POST | `/receipts/{id}/reprocess` | Re-run extraction on a `failed` or `needs_review` receipt |
+| GET | `/receipts/{id}/image` | The original upload (owner only) |
+| DELETE | `/receipts` | Delete all; body `{"confirm": "DELETE_ALL_RECEIPTS"}` |
+| POST | `/chat` | `{message, thread_id?}` → `{reply, thread_id}` |
+| GET | `/chat/threads`, `/chat/threads/{id}` | Conversation list and messages |
+| GET | `/health` | Liveness probe |
+
+Error responses worth handling in clients: `402` quota reached, `429` rate limited, `503` assistant temporarily unavailable.
+
+---
+
+## Testing and accuracy evaluation
 
 ```bash
-npm run build
-npm run start
+uv run pytest                                       # unit tests
+TEST_DATABASE_URL=postgresql://... uv run pytest    # + integration tests
+uv run ruff check app alembic tests evals
 ```
 
----
+> The integration tests **wipe the database** they point at. Use a disposable one.
 
-## API Overview
+The integration tests run the real SQL, storage, background jobs and HTTP layer with a faked model. They cover tenant isolation, per-currency aggregates, duplicate and failure handling, stuck-job recovery, quotas, export and account deletion, and that the migration matches the models.
 
-### Users
+**Accuracy is measured, not assumed:**
 
-- `POST /users/register`
-- `POST /users/login`
-- `GET /users/{user_id}` (must match token user)
+- `uv run python -m evals.run_receipts` runs real receipts from `evals/receipts/` against `expected.json` (see `evals/expected.example.json`). It prints per-field accuracy (merchant, date, total, currency, category, item count) and saves a result file. Run it before changing the model, the prompt or the schema, and compare against the saved baseline.
+- `uv run python -m evals.run_chat --user-id <id>` asks the questions in `evals/chat_cases.json` as an eval-only user and checks that each reply contains the expected numbers.
 
-### Receipts (Bearer token required)
+Eval receipts and results are gitignored because they can contain personal data.
 
-- `POST /receipts`
-- `GET /receipts` (paginated)
-- `GET /receipts/search`
-- `GET /receipts/{receipt_id}`
-- `DELETE /receipts/{receipt_id}`
-- `DELETE /receipts` (bulk confirmation body)
-- `POST /receipts/upload` (multipart files)
-
-### Chat (Bearer token required)
-
-- `POST /chat` with:
-  - request: `{ "message": "...", "thread_id": "optional" }`
-  - response: `{ "reply": "...", "thread_id": "..." }`
-
-> Chat endpoint is non-streaming: frontend waits for full response.
+CI (`.github/workflows/ci.yml`) runs lint, all tests against a Postgres service, the frontend lint and build, and a Docker build on every PR.
 
 ---
 
-## Authentication Flow
+## Deploying to Azure
 
-1. User logs in and receives JWT + `user_id`
-2. Frontend stores:
-  - `spendhist_token`
-  - `spendhist_user_id`
-3. Axios interceptor attaches `Authorization: Bearer <token>`
-4. On `401`, frontend clears auth and redirects to `/login`
+| Piece | Azure service |
+|---|---|
+| API (this Dockerfile) | Container Apps, 1–3 replicas, port 8000, health probe `/health` |
+| Database | Azure Database for PostgreSQL Flexible Server, automated backups on |
+| Receipt files | Storage account with a private container |
+| Models | Azure OpenAI; use a Data Zone or Regional deployment if data residency matters |
+| Telemetry | Application Insights |
+| Frontend | Vercel or Azure Static Web Apps, with `NEXT_PUBLIC_API_URL` set to the API |
 
----
+1. Give the Container App a **system-assigned managed identity**. Grant it **Cognitive Services OpenAI User** on the OpenAI resource and **Storage Blob Data Contributor** on the storage account. Leave `AZURE_OPENAI_API_KEY` empty and set `AZURE_STORAGE_ACCOUNT_URL`.
+2. Store `DATABASE_URL` and `JWT_SECRET_KEY` as Container Apps secrets (or Key Vault references).
+3. Set `CORS_ORIGINS` to the frontend URL.
+4. Run `alembic upgrade head` **once per release** before rolling out the new image (from CI or a Container Apps job). Replicas do not migrate at startup.
+5. Watch Application Insights for the `failed` receipt rate, 5xx responses and `llm_usage` log lines (tokens per call).
 
-## Chat Pipeline
-
-`POST /chat` -> `chat_service.chat_turn()` -> LangGraph supervisor
-
-Supervisor may:
-
-- respond directly for simple requests
-- call `sql_agent` for DB retrieval
-- call `receipt_analyst_agent` for structured analysis
-- optionally use tools (currency/search) based on query
-
-Thread memory is checkpointed by scoped thread id:
-
-- internal key: `"{user_id}:{thread_id}"`
-- frontend persists `thread_id` in `localStorage`
+**Capacity notes.** Azure OpenAI limits tokens per minute per deployment; the SDK retries 429s (`LLM_MAX_RETRIES`). Background extraction runs inside the API process, which is fine for modest traffic. If you outgrow it, move `process_receipt` to a queue worker without changing anything else, since the status column already drives the UI.
 
 ---
 
-## Performance and Timeout Notes
+## Design decisions
 
-If chat feels slow:
-
-- avoid heavy fields in agent search payloads (e.g., raw OCR text by default)
-- constrain SQL query result size and selected columns
-- reduce model token output limits
-- add caching for frequent conversions/results
-- ensure proxy/server timeouts exceed expected long-running turns
-
----
-
-## Troubleshooting
-
-### Backend fails at startup
-
-- Check required `.env` values
-- Confirm PostgreSQL is reachable from `DATABASE_URL`
-
-### 401/403 issues
-
-- Verify JWT token in frontend localStorage
-- Ensure `/users/{user_id}` uses token owner ID
-
-### CORS errors in browser
-
-- Configure `CORS_ORIGINS` with frontend origin(s)
-- Example: `http://localhost:3000`
-
-### Chat timeouts
-
-- Check model latency at gateway
-- Check DB query complexity and limits
-- Check agent prompt/tool payload size
-
-### Frontend shows old assets/logo
-
-- Hard refresh (`Ctrl + Shift + R`)
-- Bust cache with query param/versioned filenames
+- **One vision call instead of OCR then parsing.** Plain-text OCR loses layout, which is what separates a total from a payment line. The model reads the image directly and returns typed JSON.
+- **Flag, don't reject.** Users prefer fixing one field to re-uploading. Flagged receipts still count in totals, and the dashboard and chat call them out so the numbers aren't trusted blindly.
+- **Code computes, the model phrases.** Sums, averages and trends come from SQL; the model chooses a tool and writes the sentence.
+- **Fixed tools over generated SQL.** Four typed tools cover the questions people ask about receipts, and they can be tested and scoped to a user in code.
+- **A status column instead of a job queue.** It gives progress in the UI, restart recovery and retries with no extra infrastructure.
+- **No agents framework, no vector database.** The data is small and structured; SQL is the right retrieval layer.
 
 ---
 
-## Production Recommendations
+## Roadmap
 
-- Use managed Postgres with backups
-- Use persistent LangGraph checkpoint backend (not in-memory only)
-- Add centralized logging + tracing for agent steps
-- Add metrics for latency percentiles (p50/p95/p99)
-- Keep secrets in a vault/secret manager (not `.env` in deployment)
-- Put API behind reverse proxy with explicit timeout settings
-- Add CI checks (lint, typecheck, tests, migration checks)
-
----
-
+- [ ] Payments: checkout, customer portal, and a webhook that sets `users.plan` (provider depends on where the business is registered).
+- [ ] Email verification and password reset.
+- [ ] Chat history list in the web UI (the endpoints exist).
+- [ ] Email forwarding import: a receipt-forwarding address that feeds the same extraction pipeline.
+- [ ] Mobile app on the same API.
