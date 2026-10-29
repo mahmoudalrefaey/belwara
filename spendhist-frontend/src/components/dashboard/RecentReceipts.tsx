@@ -12,7 +12,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { fmtDate, money, num } from "@/lib/format";
+import { Badge } from "@/components/ui/badge";
+import { fmtDate, money } from "@/lib/format";
+import { STATUS_LABEL, STATUS_VARIANT } from "@/lib/receiptStatus";
 import type { ReceiptSummary } from "@/types/api";
 
 export interface RecentReceiptsProps {
@@ -32,22 +34,28 @@ export function RecentReceipts({ data }: RecentReceiptsProps) {
               <TableHead>Merchant</TableHead>
               <TableHead>Date</TableHead>
               <TableHead>Amount</TableHead>
-              <TableHead>Currency</TableHead>
+              <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {data.map((r) => (
               <TableRow key={r.receipt_id}>
                 <TableCell className="font-medium">
-                  {r.merchant_name || "—"}
+                  {r.merchant_name || r.source_filename || "—"}
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {fmtDate(r.receipt_date)}
                 </TableCell>
                 <TableCell className="tabular-nums">
-                  {money(num(r.total_amount))}
+                  {r.total_amount != null
+                    ? money(r.total_amount, r.currency ?? undefined)
+                    : "—"}
                 </TableCell>
-                <TableCell>{r.currency || "—"}</TableCell>
+                <TableCell>
+                  <Badge variant={STATUS_VARIANT[r.status]}>
+                    {STATUS_LABEL[r.status]}
+                  </Badge>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>

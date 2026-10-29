@@ -1,7 +1,9 @@
 "use client";
 
+import { Loader2 } from "lucide-react";
 import type { ReceiptSummary } from "@/types/api";
 import { money, fmtDate } from "@/lib/format";
+import { STATUS_LABEL, STATUS_VARIANT, categoryLabel } from "@/lib/receiptStatus";
 import { cn } from "@/lib/utils";
 import {
   Card,
@@ -22,8 +24,11 @@ export default function ReceiptCard({
   onClick,
   selected = false,
 }: ReceiptCardProps) {
-  const merchant =
-    receipt.merchant_name?.trim() || "Unknown Merchant";
+  const processing = receipt.status === "processing";
+  const title =
+    receipt.merchant_name?.trim() ||
+    (processing ? receipt.source_filename : null) ||
+    "Unknown Merchant";
 
   return (
     <button
@@ -40,19 +45,36 @@ export default function ReceiptCard({
       >
         <CardHeader className="pb-2">
           <div className="flex items-start justify-between gap-2">
-            <CardTitle className="line-clamp-2 font-semibold">
-              {merchant}
-            </CardTitle>
-            <Badge variant="secondary" className="shrink-0">
-              {receipt.currency}
-            </Badge>
+            <CardTitle className="line-clamp-2 font-semibold">{title}</CardTitle>
+            <div className="flex shrink-0 gap-1">
+              {receipt.status !== "ready" && (
+                <Badge variant={STATUS_VARIANT[receipt.status]}>
+                  {processing && <Loader2 className="animate-spin" />}
+                  {STATUS_LABEL[receipt.status]}
+                </Badge>
+              )}
+              {receipt.currency && (
+                <Badge variant="secondary">{receipt.currency}</Badge>
+              )}
+            </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-1 pt-0 text-muted-foreground">
-          <p className="text-sm">{fmtDate(receipt.receipt_date)}</p>
-          <p className="text-base font-medium text-foreground">
-            {money(receipt.total_amount, receipt.currency)}
-          </p>
+          {processing ? (
+            <p className="text-sm">Reading your receipt…</p>
+          ) : (
+            <>
+              <p className="text-sm">
+                {fmtDate(receipt.receipt_date)}
+                {receipt.category && ` · ${categoryLabel(receipt.category)}`}
+              </p>
+              <p className="text-base font-medium text-foreground">
+                {receipt.total_amount != null
+                  ? money(receipt.total_amount, receipt.currency ?? undefined)
+                  : "—"}
+              </p>
+            </>
+          )}
         </CardContent>
       </Card>
     </button>

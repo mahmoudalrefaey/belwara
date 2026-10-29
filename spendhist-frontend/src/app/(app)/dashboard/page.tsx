@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Receipt, Upload } from "lucide-react";
-import { CurrencyPie } from "@/components/dashboard/CurrencyPie";
+import { AlertTriangle, Receipt, Upload } from "lucide-react";
+import { CategoryPie } from "@/components/dashboard/CategoryPie";
 import { MerchantBar } from "@/components/dashboard/MerchantBar";
 import { RecentReceipts } from "@/components/dashboard/RecentReceipts";
 import { SpendingChart } from "@/components/dashboard/SpendingChart";
@@ -12,14 +12,14 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboard } from "@/hooks/useDashboard";
+import { categoryLabel } from "@/lib/receiptStatus";
 import { cn } from "@/lib/utils";
 
 export default function DashboardPage() {
   const {
-    stats,
-    monthlySpend,
-    topMerchants,
-    currencyBreakdown,
+    data,
+    currency,
+    setCurrency,
     recentReceipts,
     isLoading,
     isError,
@@ -69,7 +69,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (stats.receiptCount === 0) {
+  if (!data || (data.receipts === 0 && recentReceipts.length === 0)) {
     return (
       <div className="space-y-6">
         <h1 className="font-heading text-3xl font-semibold tracking-tight">
@@ -105,25 +105,75 @@ export default function DashboardPage() {
     );
   }
 
+  const cur = currency ?? undefined;
+  const stats = {
+    totalSpent: data.total,
+    receiptCount: data.receipts,
+    avgPerReceipt: data.average,
+    thisMonth: data.this_month,
+  };
+
   return (
     <div className="space-y-6">
-      <h1 className="font-heading text-3xl font-semibold tracking-tight">
-        Dashboard
-      </h1>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-heading text-3xl font-semibold tracking-tight">
+          Dashboard
+        </h1>
+        {data.currencies.length > 1 && (
+          <div className="flex flex-wrap gap-1" role="group" aria-label="Currency">
+            {data.currencies.map((c) => (
+              <Button
+                key={c.currency}
+                type="button"
+                size="sm"
+                variant={c.currency === currency ? "default" : "outline"}
+                aria-pressed={c.currency === currency}
+                onClick={() => setCurrency(c.currency)}
+              >
+                {c.currency}
+              </Button>
+            ))}
+          </div>
+        )}
+      </div>
+      {data.needs_review > 0 && (
+        <Link
+          href="/receipts"
+          className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm hover:bg-amber-500/15"
+        >
+          <AlertTriangle className="size-4 shrink-0" />
+          {data.needs_review === 1
+            ? "1 receipt needs your review."
+            : `${data.needs_review} receipts need your review.`}
+          <span className="ml-auto font-medium">Review</span>
+        </Link>
+      )}
       <motion.div
         className="space-y-6"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.25 }}
       >
-        <StatCards stats={stats} />
+        <StatCards stats={stats} currency={cur} />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2">
-            <SpendingChart data={monthlySpend} />
+            <SpendingChart
+              currency={cur}
+              data={data.by_month.map((r) => ({ month: r.label, amount: r.total }))}
+            />
           </div>
           <div className="flex flex-col gap-6">
-            <MerchantBar data={topMerchants} />
-            <CurrencyPie data={currencyBreakdown} />
+            <MerchantBar
+              currency={cur}
+              data={data.by_merchant.map((r) => ({ merchant: r.label, amount: r.total }))}
+            />
+            <CategoryPie
+              currency={cur}
+              data={data.by_category.map((r) => ({
+                category: categoryLabel(r.label === "Unknown" ? null : r.label),
+                amount: r.total,
+              }))}
+            />
           </div>
         </div>
         <RecentReceipts data={recentReceipts} />

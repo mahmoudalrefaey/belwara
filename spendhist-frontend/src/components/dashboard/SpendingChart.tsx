@@ -20,9 +20,10 @@ import { money } from "@/lib/format";
 
 export interface SpendingChartProps {
   data: { month: string; amount: number }[];
+  currency?: string;
 }
 
-export function SpendingChart({ data }: SpendingChartProps) {
+export function SpendingChart({ data, currency }: SpendingChartProps) {
   const gradId = useId().replace(/:/g, "");
 
   return (
@@ -61,7 +62,7 @@ export function SpendingChart({ data }: SpendingChartProps) {
                 background: "var(--card)",
               }}
               formatter={(value) => [
-                money(Number(value ?? 0)),
+                money(Number(value ?? 0), currency),
                 "Amount",
               ]}
               labelFormatter={(label) => `Month: ${label}`}

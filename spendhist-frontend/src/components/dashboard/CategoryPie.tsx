@@ -16,22 +16,25 @@ import {
 } from "@/components/ui/card";
 import { money } from "@/lib/format";
 
-const COLORS = ["#6366f1", "#10b981", "#f59e0b", "#f43f5e", "#0ea5e9"];
+const COLORS = [
+  "#6366f1", "#10b981", "#f59e0b", "#f43f5e", "#0ea5e9", "#8b5cf6", "#14b8a6", "#64748b",
+];
 
-export interface CurrencyPieProps {
-  data: { currency: string; amount: number }[];
+export interface CategoryPieProps {
+  data: { category: string; amount: number }[];
+  currency?: string;
 }
 
-export function CurrencyPie({ data }: CurrencyPieProps) {
+export function CategoryPie({ data, currency }: CategoryPieProps) {
   return (
     <Card className="h-full min-h-[280px]">
       <CardHeader>
-        <CardTitle>Currency Breakdown</CardTitle>
+        <CardTitle>By Category</CardTitle>
       </CardHeader>
       <CardContent className="min-h-[220px] flex-1 pb-2">
         {data.length === 0 ? (
           <p className="text-muted-foreground py-12 text-center text-sm">
-            No currency data
+            No category data
           </p>
         ) : (
           <ResponsiveContainer width="100%" height={240}>
@@ -39,7 +42,7 @@ export function CurrencyPie({ data }: CurrencyPieProps) {
               <Pie
                 data={data}
                 dataKey="amount"
-                nameKey="currency"
+                nameKey="category"
                 cx="50%"
                 cy="50%"
                 innerRadius={60}
@@ -57,8 +60,8 @@ export function CurrencyPie({ data }: CurrencyPieProps) {
                   background: "var(--card)",
                 }}
                 formatter={(value, name) => [
-                  money(Number(value ?? 0), String(name ?? "")),
-                  "Amount",
+                  money(Number(value ?? 0), currency),
+                  String(name ?? ""),
                 ]}
               />
               <Legend />

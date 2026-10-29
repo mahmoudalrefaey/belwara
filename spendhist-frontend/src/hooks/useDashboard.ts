@@ -1,113 +1,38 @@
 "use client";
 
-import { useMemo } from "react";
-import { useAllReceipts } from "./useReceipts";
-import { num } from "@/lib/format";
-import { parseISO, format, startOfMonth } from "date-fns";
-import type { ReceiptSummary } from "@/types/api";
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useDashboardData, useReceipts } from "./useReceipts";
+import { getPrefs } from "@/lib/prefs";
 
-interface StatCards {
-  totalSpent: number;
-  receiptCount: number;
-  avgPerReceipt: number;
-  thisMonth: number;
-}
-
-interface MonthlySpend {
-  month: string;
-  amount: number;
-}
-
-interface MerchantSpend {
-  merchant: string;
-  amount: number;
-}
-
-interface CurrencyBreakdown {
-  currency: string;
-  amount: number;
-}
-
+/**
+ * Dashboard numbers come from the server (computed in SQL, one currency at a time).
+ * Starts with the preferred currency; the server falls back to the user's most-used one.
+ */
 export function useDashboard() {
-  const { data, isLoading, isError, error, refetch } = useAllReceipts();
-  const receipts = data?.items ?? [];
+  const [currency, setCurrency] = useState<string | null>(() => getPrefs().defaultCurrency);
+  const dashboard = useDashboardData(currency);
+  const recent = useReceipts(5, 0);
+  const qc = useQueryClient();
 
-  const stats = useMemo<StatCards>(() => {
-    if (!receipts.length)
-      return { totalSpent: 0, receiptCount: 0, avgPerReceipt: 0, thisMonth: 0 };
-
-    const total = receipts.reduce((s, r) => s + num(r.total_amount), 0);
-    const now = new Date();
-    const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-    const thisMonth = receipts
-      .filter((r) => r.receipt_date?.startsWith(currentMonth))
-      .reduce((s, r) => s + num(r.total_amount), 0);
-
-    return {
-      totalSpent: total,
-      receiptCount: receipts.length,
-      avgPerReceipt: receipts.length ? total / receipts.length : 0,
-      thisMonth,
-    };
-  }, [receipts]);
-
-  const monthlySpend = useMemo<MonthlySpend[]>(() => {
-    const map = new Map<string, number>();
-    receipts.forEach((r) => {
-      try {
-        const key = format(startOfMonth(parseISO(r.receipt_date)), "yyyy-MM");
-        map.set(key, (map.get(key) ?? 0) + num(r.total_amount));
-      } catch {
-        /* skip bad dates */
-      }
-    });
-    return Array.from(map.entries())
-      .map(([month, amount]) => ({ month, amount }))
-      .sort((a, b) => a.month.localeCompare(b.month));
-  }, [receipts]);
-
-  const topMerchants = useMemo<MerchantSpend[]>(() => {
-    const map = new Map<string, number>();
-    receipts.forEach((r) => {
-      const name = r.merchant_name || "Unknown";
-      map.set(name, (map.get(name) ?? 0) + num(r.total_amount));
-    });
-    return Array.from(map.entries())
-      .map(([merchant, amount]) => ({ merchant, amount }))
-      .sort((a, b) => b.amount - a.amount)
-      .slice(0, 5);
-  }, [receipts]);
-
-  const currencyBreakdown = useMemo<CurrencyBreakdown[]>(() => {
-    const map = new Map<string, number>();
-    receipts.forEach((r) => {
-      const cur = r.currency || "Other";
-      map.set(cur, (map.get(cur) ?? 0) + num(r.total_amount));
-    });
-    return Array.from(map.entries())
-      .map(([currency, amount]) => ({ currency, amount }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [receipts]);
-
-  const recentReceipts = useMemo<ReceiptSummary[]>(() => {
-    return [...receipts]
-      .sort(
-        (a, b) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-      )
-      .slice(0, 5);
-  }, [receipts]);
+  // When background extraction finishes, the totals change: refresh them.
+  const processing = recent.data?.items.filter((r) => r.status === "processing").length ?? 0;
+  const lastProcessing = useRef(processing);
+  useEffect(() => {
+    if (processing < lastProcessing.current) {
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    }
+    lastProcessing.current = processing;
+  }, [processing, qc]);
 
   return {
-    stats,
-    monthlySpend,
-    topMerchants,
-    currencyBreakdown,
-    recentReceipts,
-    receipts,
-    isLoading,
-    isError,
-    error,
-    refetch,
+    data: dashboard.data,
+    currency: dashboard.data?.currency ?? null,
+    setCurrency,
+    recentReceipts: recent.data?.items ?? [],
+    isLoading: dashboard.isLoading,
+    isError: dashboard.isError,
+    error: dashboard.error,
+    refetch: dashboard.refetch,
   };
 }

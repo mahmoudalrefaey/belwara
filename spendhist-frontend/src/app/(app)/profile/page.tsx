@@ -4,6 +4,7 @@ import { startTransition, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { LogOut, Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
+import AccountCard from "@/components/profile/AccountCard";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -245,6 +246,8 @@ export default function ProfilePage() {
           </Button>
         </CardFooter>
       </Card>
+
+      <AccountCard />
     </motion.div>
   );
 }

@@ -56,14 +56,22 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
   const handleUpload = async () => {
     if (files.length === 0) return;
     try {
-      await mutateAsync(files);
-      toast.success("Receipts uploaded!");
+      const { receipts } = await mutateAsync(files);
+      toast.success(
+        receipts.length === 1
+          ? "Uploaded. We're reading your receipt now."
+          : `Uploaded ${receipts.length} receipts. We're reading them now.`,
+      );
       setFiles([]);
       onClose();
-    } catch {
-      toast.error(
-        "Upload failed. Please check your files and try again.",
-      );
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: unknown } } })
+        .response?.data?.detail;
+      const message =
+        typeof detail === "string"
+          ? detail
+          : (detail as { message?: string } | undefined)?.message;
+      toast.error(message ?? "Upload failed. Please check your files and try again.");
     }
   };
 
@@ -130,13 +138,6 @@ export default function UploadModal({ open, onClose }: UploadModalProps) {
               </li>
             ))}
           </ul>
-        )}
-
-        {isPending && (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Processing receipts... This may take a minute.
-          </p>
         )}
 
         <DialogFooter>

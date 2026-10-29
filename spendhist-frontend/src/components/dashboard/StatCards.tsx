@@ -14,39 +14,20 @@ export interface StatCardsProps {
     avgPerReceipt: number;
     thisMonth: number;
   };
+  currency?: string;
 }
 
 const items = [
-  {
-    key: "totalSpent",
-    label: "Total Spent",
-    icon: DollarSign,
-    format: (v: number) => money(v),
-  },
-  {
-    key: "receiptCount",
-    label: "Receipt Count",
-    icon: Receipt,
-    format: (v: number) => v.toLocaleString(),
-  },
-  {
-    key: "avgPerReceipt",
-    label: "Avg per Receipt",
-    icon: TrendingUp,
-    format: (v: number) => money(v),
-  },
-  {
-    key: "thisMonth",
-    label: "This Month",
-    icon: Calendar,
-    format: (v: number) => money(v),
-  },
+  { key: "totalSpent", label: "Total Spent", icon: DollarSign, isMoney: true },
+  { key: "receiptCount", label: "Receipt Count", icon: Receipt, isMoney: false },
+  { key: "avgPerReceipt", label: "Avg per Receipt", icon: TrendingUp, isMoney: true },
+  { key: "thisMonth", label: "This Month", icon: Calendar, isMoney: true },
 ] as const;
 
-export function StatCards({ stats }: StatCardsProps) {
+export function StatCards({ stats, currency }: StatCardsProps) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      {items.map(({ key, label, icon: Icon, format }) => (
+      {items.map(({ key, label, icon: Icon, isMoney }) => (
         <Card key={key}>
           <CardContent className="pt-6">
             <div className="flex items-start justify-between gap-3">
@@ -55,7 +36,7 @@ export function StatCards({ stats }: StatCardsProps) {
                   {label}
                 </p>
                 <p className="text-2xl font-bold tracking-tight tabular-nums">
-                  {format(stats[key])}
+                  {isMoney ? money(stats[key], currency) : stats[key].toLocaleString()}
                 </p>
               </div>
               <div className="bg-primary/10 text-primary flex h-10 w-10 shrink-0 items-center justify-center rounded-lg">

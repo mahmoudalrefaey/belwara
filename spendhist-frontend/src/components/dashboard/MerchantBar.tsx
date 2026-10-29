@@ -18,9 +18,10 @@ import { money } from "@/lib/format";
 
 export interface MerchantBarProps {
   data: { merchant: string; amount: number }[];
+  currency?: string;
 }
 
-export function MerchantBar({ data }: MerchantBarProps) {
+export function MerchantBar({ data, currency }: MerchantBarProps) {
   const top5 = data.slice(0, 5);
 
   return (
@@ -61,7 +62,7 @@ export function MerchantBar({ data }: MerchantBarProps) {
                 border: "1px solid var(--border)",
                 background: "var(--card)",
               }}
-              formatter={(value) => [money(Number(value ?? 0)), "Spend"]}
+              formatter={(value) => [money(Number(value ?? 0), currency), "Spend"]}
             />
             <Bar dataKey="amount" fill="#6366f1" radius={[0, 6, 6, 0]} />
           </BarChart>
