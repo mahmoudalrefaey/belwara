@@ -1,2 +1,8 @@
-"""SQLAlchemy ORM models."""
+"""SQLAlchemy ORM models (imported together so relationships resolve)."""
 
+from app.models.chat import ChatMessage
+from app.models.receipt import Receipt, ReceiptItem
+from app.models.usage import LlmUsage
+from app.models.user import User
+
+__all__ = ["ChatMessage", "LlmUsage", "Receipt", "ReceiptItem", "User"]

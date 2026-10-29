@@ -9,8 +9,7 @@ from app.config import DATABASE_URL
 from app.core.database import Base
 
 # Register models on Base.metadata
-import app.models.receipt  # noqa: F401, E402
-import app.models.user  # noqa: F401, E402
+import app.models  # noqa: F401, E402
 
 config = context.config
 if config.config_file_name is not None:
