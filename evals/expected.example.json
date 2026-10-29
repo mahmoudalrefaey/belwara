@@ -1,0 +1,15 @@
+{
+  "carrefour_2026-09-14.jpg": {
+    "merchant_name": "Carrefour",
+    "receipt_date": "2026-09-14",
+    "total_amount": 482.5,
+    "currency": "EGP",
+    "category": "groceries",
+    "item_count": 7
+  },
+  "cafe_arabic_paid_change.jpg": {
+    "merchant_name": "كافيه",
+    "total_amount": 135.0,
+    "currency": "EGP"
+  }
+}
