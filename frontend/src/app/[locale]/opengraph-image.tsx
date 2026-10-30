@@ -34,12 +34,12 @@ export default function OpengraphImage() {
         </div>
         <svg width="300" height="300" viewBox="0 0 32 32">
           <path
-            d="M8 3.5h16a2.5 2.5 0 0 1 2.5 2.5v20.5l-3.08-2.2-3.09 2.2-3.08-2.2-3.08 2.2-3.09-2.2-3.08 2.2V6A2.5 2.5 0 0 1 8 3.5Z"
+            d="M8 3.5h16a2.5 2.5 0 0 1 2.5 2.5v20.5l-3.5-2.2-3.5 2.2-3.5-2.2-3.5 2.2-3.5-2.2-3.5 2.2V6A2.5 2.5 0 0 1 8 3.5Z"
             fill="#c6f432"
           />
-          <circle cx="12.4" cy="11.6" r="1.7" fill="#0a0a0b" />
-          <circle cx="19.6" cy="11.6" r="1.7" fill="#0a0a0b" />
-          <path d="M11.6 16.6l3 2.9 5.8-6" fill="none" stroke="#0a0a0b" strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round" />
+          <circle cx="12.4" cy="11.2" r="1.6" fill="#0a0a0b" />
+          <circle cx="19.6" cy="11.2" r="1.6" fill="#0a0a0b" />
+          <path d="M11.4 17.1l3 2.9 5.4-5.6" fill="none" stroke="#0a0a0b" strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </div>
     ),
