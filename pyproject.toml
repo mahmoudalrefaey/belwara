@@ -7,7 +7,7 @@ where = ["."]
 include = ["app*"]
 
 [project]
-name = "spendhist"
+name = "belwara"
 version = "0.2.0"
 description = "Receipt extraction, spending history and assistant API."
 readme = "README.md"

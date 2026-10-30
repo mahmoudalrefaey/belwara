@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="SpendHiST",
+    title="Bel War'a API",
     description="Receipt extraction, spending history and assistant API.",
     version="0.2.0",
     lifespan=lifespan,

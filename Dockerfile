@@ -1,4 +1,4 @@
-# SpendHiST API — slim Python image with uv-managed dependencies.
+# Bel War'a API — slim Python image with uv-managed dependencies.
 FROM python:3.11-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.9 /uv /uvx /bin/

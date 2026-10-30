@@ -1,9 +1,9 @@
-# SpendHiST
+# بالورقة · Bel War’a
 
-SpendHiST turns photos and PDFs of receipts into structured spending history, then lets you explore that history on a dashboard or by asking questions in English or Arabic.
+Bel War’a (Egyptian Arabic for “on paper, to the letter”) turns photos and PDFs of receipts into structured spending history, then lets you explore that history on a dashboard or by asking questions in English or Arabic.
 
 - **Backend:** FastAPI, PostgreSQL, Azure OpenAI, Azure Blob Storage.
-- **Frontend:** Next.js (App Router), TanStack Query, Tailwind and shadcn/ui.
+- **Frontend:** Next.js (App Router), next-intl (Arabic by default, English), TanStack Query, Tailwind v4, shadcn/ui on Base UI and framer-motion. See [frontend/README.md](frontend/README.md).
 
 ---
 
@@ -234,7 +234,7 @@ app/
 alembic/versions/001_baseline.py   full schema
 evals/                accuracy evaluation scripts
 tests/                unit and integration tests
-spendhist-frontend/   Next.js app
+frontend/             Next.js app (Arabic/English, RTL)
 Dockerfile · .github/workflows/ci.yml
 ```
 
@@ -253,10 +253,10 @@ uv run uvicorn app.main:app --reload
 ```
 
 ```bash
-cd spendhist-frontend
-echo "NEXT_PUBLIC_API_URL=http://127.0.0.1:8000" > .env.local
+cd frontend
+echo "NEXT_PUBLIC_API_URL=/api" > .env.local   # Next proxies /api/* to BACKEND_URL (default http://127.0.0.1:8000)
 npm install
-npm run dev                       # http://localhost:3000
+npm run dev                       # http://localhost:3000 → /ar (Arabic) or /en
 ```
 
 With no `AZURE_STORAGE_*` set, uploads are stored in `RECEIPTS_IMG_DIR` (default `receipts_img/`).

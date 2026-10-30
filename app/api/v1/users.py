@@ -67,7 +67,7 @@ def export_my_data(
         raise HTTPException(status_code=404, detail="User not found")
     return JSONResponse(
         content=jsonable_encoder(user_service.export_user(db, user)),
-        headers={"Content-Disposition": 'attachment; filename="spendhist-export.json"'},
+        headers={"Content-Disposition": 'attachment; filename="belwara-export.json"'},
     )
 
 

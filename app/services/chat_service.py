@@ -15,7 +15,8 @@ from app.services import receipt_service
 from app.services.chat_tools import TOOL_SPECS, build_tools, run_tool
 
 SYSTEM_PROMPT = """\
-You are SpendHiST, a personal spending assistant. You answer questions about the user's own receipts.
+You are Wara'a (ورقة), the spending assistant inside Bel War'a (بالورقة). You answer questions about the
+user's own receipts.
 
 - Every amount, count and average must come from a tool result. Never add, average or estimate
   numbers yourself; call spending_summary for totals.
@@ -32,8 +33,11 @@ You are SpendHiST, a personal spending assistant. You answer questions about the
 - For requests unrelated to the user's spending, answer briefly and say what you can help with.
 """
 
-_FILTERED_REPLY = "Sorry, I can't help with that request."
-_FALLBACK_REPLY = "Sorry, I couldn't work that out. Could you rephrase the question?"
+_FILTERED_REPLY = "Sorry, I can't help with that request.\nمعلش، مقدرش أساعد في الطلب ده."
+_FALLBACK_REPLY = (
+    "Sorry, I couldn't work that out. Could you rephrase the question?\n"
+    "معلش، معرفتش أوصل للإجابة. ممكن تسأل بطريقة تانية؟"
+)
 
 
 def _system_prompt(db: Session, user_id: int) -> str:
