@@ -10,10 +10,21 @@
     "skipToContent": "Skip to content",
     "home": "Home",
     "switchLanguage": "Switch language to Arabic",
-    "theme": { "label": "Theme", "light": "Light", "dark": "Dark", "system": "System" }
+    "theme": {
+      "label": "Theme",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    },
+    "languageShort": "ع"
   },
   "status": {
-    "label": { "ready": "Read", "needs_review": "Check it", "processing": "Reading", "failed": "Unreadable" }
+    "label": {
+      "ready": "Read",
+      "needs_review": "Check it",
+      "processing": "Reading",
+      "failed": "Unreadable"
+    }
   },
   "categories": {
     "groceries": "Groceries",
@@ -82,7 +93,10 @@
     "gallery": "From gallery",
     "selected": "{count, plural, one {1 file selected} other {{n} files selected}}",
     "remove": "Remove {name}",
-    "progress": { "sending": "Uploading…", "handingOver": "Handing them to Wara’a…" },
+    "progress": {
+      "sending": "Uploading…",
+      "handingOver": "Handing them to Wara’a…"
+    },
     "cancel": "Cancel",
     "sending": "Uploading",
     "send": "{count, plural, =0 {Upload} one {Upload 1 receipt} other {Upload {n} receipts}}",
@@ -224,7 +238,12 @@
       "subtitle": "Something wasn’t clear on them. It only takes a moment.",
       "action": "Check them"
     },
-    "recent": { "title": "Latest receipts", "all": "See all", "reading": "Reading…", "unknown": "Unknown shop" },
+    "recent": {
+      "title": "Latest receipts",
+      "all": "See all",
+      "reading": "Reading…",
+      "unknown": "Unknown shop"
+    },
     "firstRun": {
       "eyebrow": "Let’s start",
       "title": "Your first receipt is one photo away",
@@ -232,9 +251,18 @@
       "subtitle": "Snap any receipt, even a crumpled one. Wara’a reads it and your spending picture starts building itself.",
       "cta": "Snap my first receipt",
       "steps": {
-        "snap": { "title": "Snap", "body": "A photo, image or PDF." },
-        "read": { "title": "Wara’a reads", "body": "Merchant, date, items and total." },
-        "ask": { "title": "Ask", "body": "“How much went on food?”" }
+        "snap": {
+          "title": "Snap",
+          "body": "A photo, image or PDF."
+        },
+        "read": {
+          "title": "Wara’a reads",
+          "body": "Merchant, date, items and total."
+        },
+        "ask": {
+          "title": "Ask",
+          "body": "“How much went on food?”"
+        }
       }
     }
   },
@@ -255,7 +283,9 @@
       "body": "They’re safe. It’s just the connection. Try again.",
       "retry": "Try again"
     },
-    "noResults": { "title": "Nothing matches “{q}”" },
+    "noResults": {
+      "title": "Nothing matches “{q}”"
+    },
     "noMatches": {
       "title": "No receipts match these filters",
       "body": "Try a wider date range or fewer filters.",
@@ -278,7 +308,11 @@
       "allStatuses": "All",
       "category": "Category",
       "dates": "Dates",
-      "presets": { "thisMonth": "This month", "lastMonth": "Last month", "last3": "Last 3 months" },
+      "presets": {
+        "thisMonth": "This month",
+        "lastMonth": "Last month",
+        "last3": "Last 3 months"
+      },
       "custom": "Custom",
       "from": "From",
       "to": "To",
@@ -307,7 +341,7 @@
       "aiNoticeTitle": "Read by AI.",
       "aiNoticeBody": "Compare it with the original and fix anything that’s off.",
       "reviewTitle": "Please check these",
-      "reviewHint": "Fix them with Edit; if everything is already right, saving confirms it.",
+      "reviewHint": "If everything matches the original, tap “Looks right” and it gets counted. If something’s off, fix it.",
       "failedTitle": "Why it couldn’t be read",
       "failedBody": "Try reading it again, or delete it and upload a clearer photo.",
       "fix": "Fix details",
@@ -323,7 +357,12 @@
       "confirmTitle": "Delete this receipt?",
       "confirmBody": "This removes the receipt, its items and the original file. It can’t be undone.",
       "cancel": "Keep it",
-      "confirmDelete": "Delete receipt"
+      "confirmDelete": "Delete receipt",
+      "reviewHintMissing": "Some essentials are missing (shop, date, total or currency). Fill them in first.",
+      "confirm": "Looks right",
+      "confirmed": "Done! Confirmed and counted.",
+      "confirmMissing": "Some essentials are missing. Fill them in, then save.",
+      "confirmFailed": "Couldn’t confirm it. Try again."
     },
     "edit": {
       "required": "Shop, date, total and currency are needed.",
@@ -368,8 +407,14 @@
         "body": "Your limit resets at the start of next month.",
         "action": "See usage"
       },
-      "rate": { "title": "Slow down a little", "body": "Too many questions in a minute. Try again shortly." },
-      "generic": { "title": "Wara’a didn’t catch that", "body": "Something went wrong on our side. Try asking again." }
+      "rate": {
+        "title": "Slow down a little",
+        "body": "Too many questions in a minute. Try again shortly."
+      },
+      "generic": {
+        "title": "Wara’a didn’t catch that",
+        "body": "Something went wrong on our side. Try asking again."
+      }
     },
     "threads": {
       "new": "New conversation",
@@ -379,8 +424,8 @@
       "untitled": "Conversation"
     },
     "empty": {
-      "title": "Ask me about your money",
-      "body": "I answer from your own receipts only, in Arabic or English.",
+      "title": "Hi, I’m Wara’a! Ask me about your money",
+      "body": "I answer from your own receipts only, in Arabic or English, plus anything about using the app.",
       "trust": "Answers are generated by AI from your receipt data. Double-check anything important on the Receipts page."
     },
     "suggestions": {
@@ -388,7 +433,8 @@
       "topCategory": "What do I spend the most on?",
       "biggest": "What was my biggest receipt?",
       "compare": "Compare this month with last month"
-    }
+    },
+    "assistantName": "Wara’a"
   },
   "profile": {
     "eyebrow": "Your account",
@@ -474,16 +520,35 @@
       "secondary": "See how it works",
       "note": "Free for up to 30 receipts a month. No card needed.",
       "longTitle": "Supermarket run",
-      "longItems": ["Bread", "Milk", "Cheese", "Tea", "Snacks", "“Just one thing”"]
+      "longItems": [
+        "Bread",
+        "Milk",
+        "Cheese",
+        "Tea",
+        "Snacks",
+        "“Just one thing”"
+      ]
     },
     "demo": {
       "merchant": "Al Nour Grocery",
       "date": "12 Oct 2026",
       "items": [
-        { "name": "Baladi bread ×10", "total": "20.00" },
-        { "name": "Milk 1L ×2", "total": "70.00" },
-        { "name": "White cheese", "total": "85.00" },
-        { "name": "Tea", "total": "45.00" }
+        {
+          "name": "Baladi bread ×10",
+          "total": "20.00"
+        },
+        {
+          "name": "Milk 1L ×2",
+          "total": "70.00"
+        },
+        {
+          "name": "White cheese",
+          "total": "85.00"
+        },
+        {
+          "name": "Tea",
+          "total": "45.00"
+        }
       ],
       "totalLabel": "Total",
       "total": "220.00 EGP"
@@ -495,19 +560,39 @@
       "phoneList": "Your receipts",
       "stamp": "Read",
       "steps": {
-        "snap": { "title": "Snap or upload", "body": "Camera, gallery or PDF, even several at once." },
-        "read": { "title": "Wara’a reads it", "body": "Merchant, date, every item and the total." },
-        "check": { "title": "You stay in charge", "body": "Anything unclear gets flagged for you to check." }
+        "snap": {
+          "title": "Snap or upload",
+          "body": "Camera, gallery or PDF, even several at once."
+        },
+        "read": {
+          "title": "Wara’a reads it",
+          "body": "Merchant, date, every item and the total."
+        },
+        "check": {
+          "title": "You stay in charge",
+          "body": "Anything unclear gets flagged for you to check."
+        }
       }
     },
     "understand": {
       "eyebrow": "Act 3 · Understanding",
       "title": "AI reads it. <mark>You decide.</mark>",
       "body": "Every field Wara’a pulls out is marked as read by AI, right next to the original photo. If something looks off, it flags it so you can fix it in seconds.",
-      "fields": { "merchant": "Merchant", "date": "Date", "items": "Items", "total": "Total" },
+      "fields": {
+        "merchant": "Merchant",
+        "date": "Date",
+        "items": "Items",
+        "total": "Total"
+      },
       "points": {
-        "review": { "title": "Flags, not guesses", "body": "Missing totals, odd dates or likely duplicates are marked “check it”." },
-        "edit": { "title": "Edit anything", "body": "Fix a name, a number or an item; your version is what counts." }
+        "review": {
+          "title": "Flags, not guesses",
+          "body": "Missing totals, odd dates or likely duplicates are marked “check it”."
+        },
+        "edit": {
+          "title": "Edit anything",
+          "body": "Fix a name, a number or an item; your version is what counts."
+        }
       }
     },
     "clarity": {
@@ -517,10 +602,26 @@
       "monthLabel": "October so far",
       "monthTotal": "4,380.00 EGP",
       "bars": [
-        { "label": "Groceries", "value": 1640, "amount": "1,640.00" },
-        { "label": "Dining", "value": 1120, "amount": "1,120.00" },
-        { "label": "Transport", "value": 860, "amount": "860.00" },
-        { "label": "Bills", "value": 760, "amount": "760.00" }
+        {
+          "label": "Groceries",
+          "value": 1640,
+          "amount": "1,640.00"
+        },
+        {
+          "label": "Dining",
+          "value": 1120,
+          "amount": "1,120.00"
+        },
+        {
+          "label": "Transport",
+          "value": 860,
+          "amount": "860.00"
+        },
+        {
+          "label": "Bills",
+          "value": 760,
+          "amount": "760.00"
+        }
       ],
       "question": "How much did I spend on groceries this month?",
       "answer": "So far this month you’ve spent <amt>1,640.00 EGP</amt> on groceries across 9 receipts. Most of it was at Al Nour Grocery.",
@@ -531,20 +632,44 @@
       "title": "Small app. <mark>Big relief.</mark>",
       "body": "Built for how people in Egypt and the Gulf actually shop and pay.",
       "cards": {
-        "currency": { "title": "Every currency stays itself", "body": "Pounds, riyals and dollars are never added together. Each currency gets its own totals." },
-        "review": { "title": "Check before you trust", "body": "Unclear receipts are flagged with the reason, next to the original photo." },
-        "chat": { "title": "Ask in Arabic or English", "body": "“How much went on food?” Wara’a answers from your receipts." },
-        "search": { "title": "Find any receipt", "body": "Search by shop, item or any word printed on the receipt." },
-        "yours": { "title": "Your data is yours", "body": "Export everything as JSON or delete your account whenever you want." }
+        "currency": {
+          "title": "Every currency stays itself",
+          "body": "Pounds, riyals and dollars are never added together. Each currency gets its own totals."
+        },
+        "review": {
+          "title": "Check before you trust",
+          "body": "Unclear receipts are flagged with the reason, next to the original photo."
+        },
+        "chat": {
+          "title": "Ask in Arabic or English",
+          "body": "“How much went on food?” Wara’a answers from your receipts."
+        },
+        "search": {
+          "title": "Find any receipt",
+          "body": "Search by shop, item or any word printed on the receipt."
+        },
+        "yours": {
+          "title": "Your data is yours",
+          "body": "Export everything as JSON or delete your account whenever you want."
+        }
       }
     },
     "privacy": {
       "title": "Private by default",
       "body": "Financial data deserves care. Here’s what we promise, plainly.",
       "facts": {
-        "isolated": { "title": "Only you see your receipts", "body": "Every request is checked against your account." },
-        "export": { "title": "Take it with you", "body": "Download all your data as a JSON file at any time." },
-        "delete": { "title": "Leave cleanly", "body": "Deleting your account removes your receipts, files and chats." }
+        "isolated": {
+          "title": "Only you see your receipts",
+          "body": "Every request is checked against your account."
+        },
+        "export": {
+          "title": "Take it with you",
+          "body": "Download all your data as a JSON file at any time."
+        },
+        "delete": {
+          "title": "Leave cleanly",
+          "body": "Deleting your account removes your receipts, files and chats."
+        }
       }
     },
     "pricing": {
@@ -578,12 +703,30 @@
       "eyebrow": "Questions",
       "title": "Good to know",
       "items": {
-        "free": { "q": "Is it really free?", "a": "Yes. The free plan includes up to 30 receipts and 50 questions to Wara’a every month, with every feature. A Pro plan with higher limits is coming." },
-        "formats": { "q": "What can I upload?", "a": "Photos and images (JPEG, PNG, WebP) or PDF receipts. You can upload several at once from your phone’s camera or gallery." },
-        "accuracy": { "q": "Is the AI always right?", "a": "No, and we don’t pretend it is. That’s why every receipt sits next to its original, unclear ones get flagged with a reason, and you can edit anything." },
-        "privacy": { "q": "Who can see my receipts?", "a": "Only you. Every request is tied to your account. You can export all of your data or delete your account and everything in it at any time." },
-        "currencies": { "q": "I pay in more than one currency", "a": "No problem. Totals are always kept per currency and never mixed. You can switch currencies on the dashboard, or ask Wara’a to convert." },
-        "language": { "q": "Does it work in Arabic?", "a": "Yes. The app is in Arabic and English, and you can ask Wara’a questions in either language." }
+        "free": {
+          "q": "Is it really free?",
+          "a": "Yes. The free plan includes up to 30 receipts and 50 questions to Wara’a every month, with every feature. A Pro plan with higher limits is coming."
+        },
+        "formats": {
+          "q": "What can I upload?",
+          "a": "Photos and images (JPEG, PNG, WebP) or PDF receipts. You can upload several at once from your phone’s camera or gallery."
+        },
+        "accuracy": {
+          "q": "Is the AI always right?",
+          "a": "No, and we don’t pretend it is. That’s why every receipt sits next to its original, unclear ones get flagged with a reason, and you can edit anything."
+        },
+        "privacy": {
+          "q": "Who can see my receipts?",
+          "a": "Only you. Every request is tied to your account. You can export all of your data or delete your account and everything in it at any time."
+        },
+        "currencies": {
+          "q": "I pay in more than one currency",
+          "a": "No problem. Totals are always kept per currency and never mixed. You can switch currencies on the dashboard, or ask Wara’a to convert."
+        },
+        "language": {
+          "q": "Does it work in Arabic?",
+          "a": "Yes. The app is in Arabic and English, and you can ask Wara’a questions in either language."
+        }
       }
     },
     "cta": {

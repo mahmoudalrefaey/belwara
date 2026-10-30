@@ -9,7 +9,16 @@ import { setPrefs } from "@/lib/prefs";
 import { cn } from "@/lib/utils";
 
 /** ع / EN: switches language and keeps the current page and query. */
-export function LanguageSwitcher({ className, tone = "default" }: { className?: string; tone?: "default" | "inverse" }) {
+export function LanguageSwitcher({
+  className,
+  tone = "default",
+  compact = false,
+}: {
+  className?: string;
+  tone?: "default" | "inverse";
+  /** Short label (ع / EN) for tight spaces like the phone top bar. */
+  compact?: boolean;
+}) {
   const locale = useLocale();
   const t = useTranslations("common");
   const router = useRouter();
@@ -36,7 +45,9 @@ export function LanguageSwitcher({ className, tone = "default" }: { className?: 
       )}
     >
       <Languages className="size-4" aria-hidden />
-      <span lang={next}>{next === "ar" ? "عربي" : "English"}</span>
+      <span lang={next} aria-hidden={compact || undefined}>
+        {compact ? t("languageShort") : next === "ar" ? "عربي" : "English"}
+      </span>
     </button>
   );
 }

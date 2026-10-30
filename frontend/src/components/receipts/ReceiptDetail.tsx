@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { toast } from "sonner";
 import {
   AlertTriangle,
+  CheckCheck,
   ExternalLink,
   FileText,
   Loader2,
@@ -19,7 +20,9 @@ import {
   useReceipt,
   useReceiptImage,
   useReprocessReceipt,
+  useUpdateReceipt,
 } from "@/hooks/useReceipts";
+import { errorStatus } from "@/lib/api";
 import type { ReceiptResponse } from "@/types/api";
 import ReceiptEditForm from "@/components/receipts/ReceiptEditForm";
 import { Wara } from "@/components/illustrations/Wara";
@@ -126,6 +129,22 @@ export default function ReceiptDetail({
   const image = useReceiptImage(receiptId, open && !!data?.has_image);
   const { mutateAsync: deleteReceipt, isPending: isDeleting } = useDeleteReceipt();
   const { mutateAsync: reprocess, isPending: isReprocessing } = useReprocessReceipt(receiptId);
+  const { mutateAsync: confirmReceipt, isPending: isConfirming } = useUpdateReceipt(receiptId);
+
+  // Saving with no changes tells the server "I checked it, it's right" (the receipt becomes ready).
+  const handleConfirm = async () => {
+    try {
+      await confirmReceipt({});
+      toast.success(t("confirmed"));
+    } catch (err) {
+      if (errorStatus(err) === 422) {
+        toast.error(t("confirmMissing"));
+        setEditing(true);
+      } else {
+        toast.error(t("confirmFailed"));
+      }
+    }
+  };
 
   const handleDelete = async () => {
     try {
@@ -149,7 +168,15 @@ export default function ReceiptDetail({
 
   const processing = data?.status === "processing";
   const failed = data?.status === "failed";
-  const flagged = data?.status === "needs_review" || failed;
+  const needsReview = data?.status === "needs_review";
+  const flagged = needsReview || failed;
+  // The server only confirms a receipt that has the essentials; otherwise the user must fix it first.
+  const canConfirm =
+    needsReview &&
+    !!data?.merchant_name?.trim() &&
+    !!data?.receipt_date &&
+    data?.total_amount != null &&
+    !!data?.currency;
   const title = data?.merchant_name?.trim() || data?.source_filename || t("unknownMerchant");
 
   return (
@@ -259,7 +286,30 @@ export default function ReceiptDetail({
                           </li>
                         ))}
                       </ul>
-                      {!failed && <p className="text-xs text-muted-foreground">{t("reviewHint")}</p>}
+                      {needsReview && !editing && (
+                        <div className="space-y-3 border-t border-warning/25 pt-3">
+                          <p className="text-xs text-muted-foreground">
+                            {canConfirm ? t("reviewHint") : t("reviewHintMissing")}
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {canConfirm && (
+                              <Button size="sm" onClick={handleConfirm} disabled={isConfirming}>
+                                {isConfirming ? <Loader2 className="size-4 animate-spin" /> : <CheckCheck className="size-4" />}
+                                {t("confirm")}
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant={canConfirm ? "outline" : "default"}
+                              onClick={() => setEditing(true)}
+                              disabled={isConfirming}
+                            >
+                              <Pencil className="size-4" />
+                              {t("fix")}
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ) : null}
 
@@ -282,10 +332,19 @@ export default function ReceiptDetail({
 
           {data && !isLoading && !editing && (
             <SheetFooter className="flex-row flex-wrap items-center gap-2 border-t bg-muted/30 px-6 py-4">
+              {needsReview && canConfirm && (
+                <Button onClick={handleConfirm} disabled={isConfirming}>
+                  {isConfirming ? <Loader2 className="size-4 animate-spin" /> : <CheckCheck className="size-4" />}
+                  {t("confirm")}
+                </Button>
+              )}
               {!processing && (
-                <Button variant={data.status === "needs_review" ? "default" : "outline"} onClick={() => setEditing(true)}>
+                <Button
+                  variant={needsReview && !canConfirm ? "default" : "outline"}
+                  onClick={() => setEditing(true)}
+                >
                   <Pencil className="size-4" />
-                  {data.status === "needs_review" ? t("fix") : t("edit")}
+                  {needsReview ? t("fix") : t("edit")}
                 </Button>
               )}
               {flagged && data.has_image && (

@@ -29,6 +29,7 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
     >
       {!isUser && <LogoMark className="mt-1 size-9 shrink-0 text-ink dark:text-bone" />}
       <div className={cn("max-w-[85%] space-y-1.5 sm:max-w-[75%]", isUser && "items-end")}>
+        {!isUser && <p className="px-2 text-xs font-semibold text-muted-foreground">{t("assistantName")}</p>}
         <div
           className={cn(
             "px-4 py-3 leading-relaxed",

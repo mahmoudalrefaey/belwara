@@ -11,6 +11,7 @@ import { UploadProvider } from "@/components/layout/UploadProvider";
 import { useReceiptWatcher } from "@/hooks/useReceiptWatcher";
 import { Logo } from "@/components/brand/Logo";
 import { Wara } from "@/components/illustrations/Wara";
+import { LanguageSwitcher } from "@/components/common/Toggles";
 import { duration, ease } from "@/lib/motion";
 
 function Watcher() {
@@ -64,6 +65,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <Link href="/dashboard" aria-label={t("home")}>
           <Logo className="text-sm" markClassName="size-8 text-ink dark:text-bone" />
         </Link>
+        <LanguageSwitcher compact />
       </header>
       <main
         id="main"

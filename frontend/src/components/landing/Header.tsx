@@ -48,6 +48,7 @@ export function LandingHeader() {
         </nav>
 
         <div className="flex items-center gap-2">
+          <LanguageSwitcher tone="inverse" compact className="sm:hidden" />
           <LanguageSwitcher tone="inverse" className="hidden sm:inline-flex" />
           {isAuthenticated ? (
             <Link href="/dashboard" className={buttonVariants({ size: "sm", className: "h-9 px-4" })}>
