@@ -2,8 +2,9 @@
 Chat answer accuracy against a dedicated eval user's real receipts.
 
 Write cases in evals/chat_cases.json (format: evals/chat_cases.example.json). Each reply must
-contain every string in "expect" (thousands separators are ignored). Cases with the same
-"thread" run in order in one conversation, so follow-ups can be tested.
+contain every string in "expect" and none of the strings in "forbid" (case-insensitive, thousands
+separators ignored). "forbid" checks scope: an out-of-scope question must not get a real answer.
+Cases with the same "thread" run in order in one conversation, so follow-ups can be tested.
 
     uv run python -m evals.run_chat --user-id 7
 
@@ -38,11 +39,18 @@ def main() -> None:
         for case in cases:
             key = case.get("thread") or uuid.uuid4().hex
             reply, threads[key] = chat_turn(db, args.user_id, case["question"], threads.get(key))
-            missing = [e for e in case["expect"] if _normalise(e) not in _normalise(reply)]
-            passed += not missing
-            print(f"{'✓' if not missing else '✗'} {case['question']}")
+            text = _normalise(reply)
+            missing = [e for e in case.get("expect", []) if _normalise(e) not in text]
+            forbidden = [f for f in case.get("forbid", []) if _normalise(f) in text]
+            ok = not missing and not forbidden
+            passed += ok
+            print(f"{'✓' if ok else '✗'} {case['question']}")
             if missing:
-                print(f"    missing {missing}\n    reply: {reply}")
+                print(f"    missing {missing}")
+            if forbidden:
+                print(f"    should not contain {forbidden}")
+            if not ok:
+                print(f"    reply: {reply}")
     finally:
         db.close()
     print(f"\n{passed}/{len(cases)} passed")
