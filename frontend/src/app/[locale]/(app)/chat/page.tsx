@@ -57,7 +57,13 @@ function ChatView() {
   return (
     <div className="flex h-[calc(100dvh-13.5rem)] min-h-[420px] gap-6 md:h-[calc(100dvh-5.5rem)]">
       <aside className="hidden w-64 shrink-0 lg:flex">
-        <ThreadList activeId={threadId} onOpen={openThread} onNew={startNew} className="w-full" />
+        <ThreadList
+          activeId={threadId}
+          onOpen={openThread}
+          onNew={startNew}
+          onDeleted={(id) => id === threadId && newChat()}
+          className="w-full"
+        />
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col" aria-labelledby="chat-title">
@@ -138,6 +144,7 @@ function ChatView() {
               setHistoryOpen(false);
             }}
             onNew={startNew}
+            onDeleted={(id) => id === threadId && newChat()}
             className="min-h-0 flex-1"
           />
         </SheetContent>

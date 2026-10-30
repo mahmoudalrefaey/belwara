@@ -2,9 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
-import { AlertCircle, MessageSquarePlus, X } from "lucide-react";
+import { toast } from "sonner";
+import { AlertCircle, Loader2, MessageSquarePlus, Trash2, X } from "lucide-react";
 import type { ChatError } from "@/hooks/useChat";
-import { useChatThreads } from "@/hooks/useChat";
+import { useChatThreads, useDeleteThread } from "@/hooks/useChat";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Link } from "@/i18n/navigation";
 import { Wara } from "@/components/illustrations/Wara";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -61,16 +70,33 @@ export function ThreadList({
   activeId,
   onOpen,
   onNew,
+  onDeleted,
   className,
 }: {
   activeId: string | null;
   onOpen: (id: string) => void;
   onNew: () => void;
+  /** Called after a conversation is deleted (e.g. to clear it if it was open). */
+  onDeleted?: (id: string) => void;
   className?: string;
 }) {
   const t = useTranslations("chat.threads");
   const f = useFormat();
   const { data, isLoading, isError } = useChatThreads();
+  const { mutateAsync: deleteThread, isPending: deleting } = useDeleteThread();
+  const [pending, setPending] = useState<{ id: string; title: string } | null>(null);
+
+  const confirmDelete = async () => {
+    if (!pending) return;
+    try {
+      await deleteThread(pending.id);
+      onDeleted?.(pending.id);
+      toast.success(t("deleted"));
+      setPending(null);
+    } catch {
+      toast.error(t("deleteFailed"));
+    }
+  };
 
   return (
     <div className={cn("flex min-h-0 flex-col", className)}>
@@ -95,20 +121,36 @@ export function ThreadList({
             {data.map((th) => {
               const active = th.thread_id === activeId;
               return (
-                <li key={th.thread_id}>
+                <li key={th.thread_id} className="group/thread relative">
                   <button
                     type="button"
                     onClick={() => onOpen(th.thread_id)}
                     aria-current={active ? "true" : undefined}
                     className={cn(
-                      "w-full cursor-pointer rounded-2xl px-3 py-2.5 text-start transition-colors focus-visible:outline-2 focus-visible:outline-ring",
+                      "w-full cursor-pointer rounded-2xl py-2.5 ps-3 pe-11 text-start transition-colors focus-visible:outline-2 focus-visible:outline-ring",
                       active ? "bg-lime text-ink" : "hover:bg-muted",
                     )}
                   >
-                    <p className="line-clamp-1 text-sm font-medium">{th.title || t("untitled")}</p>
+                    <p className="bidi line-clamp-1 text-sm font-medium" dir="auto">{th.title || t("untitled")}</p>
                     <p className={cn("text-xs", active ? "text-ink/60" : "text-muted-foreground")}>
                       {f.relative(th.last_message_at)}
                     </p>
+                  </button>
+                  {/* Always visible on touch screens; on desktop it shows on hover or keyboard focus. */}
+                  <button
+                    type="button"
+                    onClick={() => setPending({ id: th.thread_id, title: th.title || t("untitled") })}
+                    aria-label={t("deleteAria", { title: th.title || t("untitled") })}
+                    title={t("delete")}
+                    className={cn(
+                      "absolute end-1.5 top-1/2 grid size-8 -translate-y-1/2 cursor-pointer place-items-center rounded-full transition-[opacity,background-color] focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring",
+                      "opacity-100 pointer-fine:opacity-0 pointer-fine:group-hover/thread:opacity-100",
+                      active
+                        ? "text-ink/70 hover:bg-ink/10"
+                        : "text-muted-foreground hover:bg-destructive/10 hover:text-destructive",
+                    )}
+                  >
+                    <Trash2 className="size-4" aria-hidden />
                   </button>
                 </li>
               );
@@ -116,6 +158,29 @@ export function ThreadList({
           </ul>
         )}
       </div>
+
+      <Dialog open={!!pending} onOpenChange={(o) => !o && !deleting && setPending(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("confirmTitle")}</DialogTitle>
+            <DialogDescription>{t("confirmBody")}</DialogDescription>
+          </DialogHeader>
+          {pending && (
+            <p className="bidi line-clamp-2 rounded-xl bg-muted px-3 py-2 text-sm" dir="auto">
+              {pending.title}
+            </p>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPending(null)} disabled={deleting}>
+              {t("cancel")}
+            </Button>
+            <Button variant="destructive" onClick={confirmDelete} disabled={deleting}>
+              {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              {t("confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

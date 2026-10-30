@@ -25,7 +25,7 @@ from PIL import Image  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from app.core.database import Base, SessionLocal, engine  # noqa: E402
-from app.models import Receipt, ReceiptItem, User  # noqa: E402
+from app.models import ChatMessage, Receipt, ReceiptItem, User  # noqa: E402
 from app.models.usage import LlmUsage  # noqa: E402
 from app.services import (  # noqa: E402
     chat_service,
@@ -292,6 +292,36 @@ def test_chat_tool_loop_uses_server_numbers_and_persists_history(monkeypatch):
         history = client.get(f"/chat/threads/{body['thread_id']}", headers=h).json()
         assert [m["role"] for m in history] == ["user", "assistant"]
         assert client.get("/chat/threads", headers=h).json()[0]["title"] == "How much did I spend?"
+
+
+def test_deleting_a_chat_hides_it_but_still_counts_toward_the_quota(monkeypatch):
+    monkeypatch.setattr(
+        chat_service.client.chat.completions, "create",
+        lambda **kw: _completion(SimpleNamespace(content="Hi!", tool_calls=None)),
+    )
+    from app.main import app
+
+    with TestClient(app) as client:
+        h = _auth(client)
+        other = _auth(client, "b@x.com")
+        thread = client.post("/chat", headers=h, json={"message": "my secret"}).json()["thread_id"]
+        keep = client.post("/chat", headers=h, json={"message": "keep me"}).json()["thread_id"]
+
+        # Nobody else can delete it, and a missing thread is a 404.
+        assert client.delete(f"/chat/threads/{thread}", headers=other).status_code == 404
+        assert client.delete("/chat/threads/nope", headers=h).status_code == 404
+
+        assert client.delete(f"/chat/threads/{thread}", headers=h).status_code == 204
+        assert client.get(f"/chat/threads/{thread}", headers=h).status_code == 404
+        assert [t["thread_id"] for t in client.get("/chat/threads", headers=h).json()] == [keep]
+        assert "my secret" not in client.get("/users/me/export", headers=h).text
+        # Deleting doesn't refund the question.
+        assert client.get("/users/me/usage", headers=h).json()["chat"]["used"] == 2
+
+        db = SessionLocal()
+        leftovers = db.query(ChatMessage).filter(ChatMessage.thread_id == thread).all()
+        assert [(m.role, m.content) for m in leftovers] == [("user", "")]
+        db.close()
 
 
 # ── plans, quotas, export and account deletion ──────────────────────────────

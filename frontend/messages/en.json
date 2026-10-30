@@ -421,7 +421,15 @@
       "title": "Conversations",
       "error": "Couldn’t load past conversations.",
       "empty": "Your conversations will appear here.",
-      "untitled": "Conversation"
+      "untitled": "Conversation",
+      "delete": "Delete conversation",
+      "deleteAria": "Delete conversation: {title}",
+      "confirmTitle": "Delete this conversation?",
+      "confirmBody": "It disappears from your history and from Wara’a’s memory for good. Questions you asked still count toward this month’s limit.",
+      "cancel": "Keep it",
+      "confirm": "Delete",
+      "deleted": "Conversation deleted",
+      "deleteFailed": "Couldn’t delete it. Try again."
     },
     "empty": {
       "title": "Hi, I’m Wara’a! Ask me about your money",

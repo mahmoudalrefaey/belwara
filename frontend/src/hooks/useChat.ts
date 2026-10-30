@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, errorDetail, errorStatus } from "@/lib/api";
 import { KEYS, read } from "@/lib/storage";
 import type {
@@ -32,6 +32,17 @@ export function useChatThreads() {
       return data;
     },
     staleTime: 30_000,
+  });
+}
+
+/** Delete one conversation for good (it also leaves Wara'a's memory). */
+export function useDeleteThread() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: async (threadId) => {
+      await api.delete(`/chat/threads/${encodeURIComponent(threadId)}`);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["chat-threads"] }),
   });
 }
 

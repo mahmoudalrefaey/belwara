@@ -55,7 +55,7 @@ def export_user(db: Session, user: User) -> dict:
     )
     messages = (
         db.query(ChatMessage)
-        .filter(ChatMessage.user_id == user.user_id)
+        .filter(ChatMessage.user_id == user.user_id, ChatMessage.deleted_at.is_(None))
         .order_by(ChatMessage.id)
         .all()
     )

@@ -3,7 +3,7 @@
 import logging
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from openai import APIError
 from sqlalchemy.orm import Session
 
@@ -54,3 +54,15 @@ def get_thread(
     if not messages:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return messages
+
+
+@router.delete("/threads/{thread_id}", status_code=204)
+def delete_thread(
+    thread_id: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Delete one of the user's conversations (it disappears from history, export and the model)."""
+    if not chat_service.delete_thread(db, user_id, thread_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return Response(status_code=204)

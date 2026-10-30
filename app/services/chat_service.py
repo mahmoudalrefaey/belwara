@@ -2,7 +2,7 @@
 
 import re
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
 from openai import BadRequestError
@@ -114,7 +114,11 @@ def _language_hint(message: str) -> str:
 def _history(db: Session, user_id: int, thread_id: str) -> List[dict]:
     rows = (
         db.query(ChatMessage)
-        .filter(ChatMessage.user_id == user_id, ChatMessage.thread_id == thread_id)
+        .filter(
+            ChatMessage.user_id == user_id,
+            ChatMessage.thread_id == thread_id,
+            ChatMessage.deleted_at.is_(None),
+        )
         .order_by(ChatMessage.id.desc())
         .limit(CHAT_HISTORY_MESSAGES)
         .all()
@@ -198,7 +202,7 @@ def list_threads(db: Session, user_id: int, limit: int = 50) -> List[dict]:
             func.min(ChatMessage.id).label("first_id"),
             func.max(ChatMessage.created_at).label("last_message_at"),
         )
-        .filter(ChatMessage.user_id == user_id)
+        .filter(ChatMessage.user_id == user_id, ChatMessage.deleted_at.is_(None))
         .group_by(ChatMessage.thread_id)
         .order_by(func.max(ChatMessage.created_at).desc())
         .limit(limit)
@@ -222,7 +226,31 @@ def list_threads(db: Session, user_id: int, limit: int = 50) -> List[dict]:
 def get_thread(db: Session, user_id: int, thread_id: str) -> List[ChatMessage]:
     return (
         db.query(ChatMessage)
-        .filter(ChatMessage.user_id == user_id, ChatMessage.thread_id == thread_id)
+        .filter(
+            ChatMessage.user_id == user_id,
+            ChatMessage.thread_id == thread_id,
+            ChatMessage.deleted_at.is_(None),
+        )
         .order_by(ChatMessage.id)
         .all()
     )
+
+
+def delete_thread(db: Session, user_id: int, thread_id: str) -> bool:
+    """Delete one conversation. Returns False when there is nothing to delete.
+
+    Assistant replies are removed. The user's own messages are emptied and marked deleted rather
+    than removed, because the monthly chat quota counts them; nothing readable is kept.
+    """
+    rows = get_thread(db, user_id, thread_id)
+    if not rows:
+        return False
+    now = datetime.now(timezone.utc)
+    for m in rows:
+        if m.role == "user":
+            m.content = ""
+            m.deleted_at = now
+        else:
+            db.delete(m)
+    db.commit()
+    return True
