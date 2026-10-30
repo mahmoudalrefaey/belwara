@@ -1,0 +1,605 @@
+{
+  "meta": {
+    "brand": "Bel War’a",
+    "title": "Bel War’a · Every receipt, read and counted",
+    "description": "Snap your receipts and Bel War’a reads them, organises your spending and answers questions about it, in Arabic or English."
+  },
+  "common": {
+    "close": "Close",
+    "loading": "Getting your receipts ready…",
+    "skipToContent": "Skip to content",
+    "home": "Home",
+    "switchLanguage": "Switch language to Arabic",
+    "theme": { "label": "Theme", "light": "Light", "dark": "Dark", "system": "System" }
+  },
+  "status": {
+    "label": { "ready": "Read", "needs_review": "Check it", "processing": "Reading", "failed": "Unreadable" }
+  },
+  "categories": {
+    "groceries": "Groceries",
+    "dining": "Dining",
+    "transport": "Transport",
+    "shopping": "Shopping",
+    "bills": "Bills",
+    "health": "Health",
+    "entertainment": "Entertainment",
+    "other": "Other",
+    "uncategorized": "Uncategorized"
+  },
+  "reasons": {
+    "missing_merchant_name": "Couldn’t find the merchant name",
+    "missing_receipt_date": "Couldn’t find the date",
+    "missing_total_amount": "Couldn’t find the total",
+    "missing_currency": "Couldn’t tell the currency",
+    "invalid_total": "The total looks off",
+    "date_in_future": "The date is in the future",
+    "date_too_old": "The date is more than 2 years ago",
+    "items_sum_mismatch": "The items don’t add up to the total",
+    "possible_duplicate": "Looks like a receipt you already uploaded",
+    "not_a_receipt": "This doesn’t look like a receipt",
+    "processing_error": "Couldn’t read this file. Try reading it again."
+  },
+  "nav": {
+    "label": "Main",
+    "dashboard": "Home",
+    "receipts": "Receipts",
+    "chat": "Ask Wara’a",
+    "profile": "Account",
+    "scan": "Snap a receipt",
+    "scanHint": "Photo, image or PDF",
+    "planFree": "Free plan",
+    "planPro": "Pro plan",
+    "usageLabel": "Receipts used this month",
+    "usageHint": "Receipts this month",
+    "logout": "Log out"
+  },
+  "watch": {
+    "aReceipt": "Your receipt",
+    "open": "Open",
+    "review": "Check it",
+    "ready": "{merchant} is read and counted",
+    "needsReview": "{merchant} needs a quick look",
+    "needsReviewHint": "Something wasn’t clear. Check it against the photo.",
+    "failed": "Wara’a couldn’t read one of your receipts",
+    "milestone": {
+      "first": "Your first receipt is in!",
+      "firstHint": "That’s how it starts. Every receipt makes the picture clearer.",
+      "count": "{n} receipts saved",
+      "countHint": "Your spending picture keeps getting sharper."
+    }
+  },
+  "upload": {
+    "title": "Snap or upload receipts",
+    "description": "Photos or PDFs, as many as you like. Wara’a reads them in the background.",
+    "dropzone": {
+      "aria": "Choose receipt files",
+      "idle": "Drag receipts here, or tap to choose",
+      "active": "Drop them here!",
+      "reject": "Only images or PDFs, please",
+      "formats": "JPEG, PNG, WebP or PDF"
+    },
+    "camera": "Take a photo",
+    "gallery": "From gallery",
+    "selected": "{count, plural, one {1 file selected} other {{n} files selected}}",
+    "remove": "Remove {name}",
+    "progress": { "sending": "Uploading…", "handingOver": "Handing them to Wara’a…" },
+    "cancel": "Cancel",
+    "sending": "Uploading",
+    "send": "{count, plural, =0 {Upload} one {Upload 1 receipt} other {Upload {n} receipts}}",
+    "sent": {
+      "title": "{count, plural, one {Receipt received} other {{n} receipts received}}",
+      "description": "Wara’a is reading now. You’ll get a heads-up when it’s done.",
+      "action": "View receipts"
+    },
+    "errors": {
+      "quota": "You’ve reached this month’s receipt limit",
+      "quotaAction": "See usage",
+      "rate": "That’s a lot at once. Give it a minute and try again.",
+      "generic": "The upload didn’t go through. Check the files and try again."
+    }
+  },
+  "auth": {
+    "side": {
+      "headline": "Every receipt, counted <mark>to the letter</mark>.",
+      "sub": "Snap it, Wara’a reads it, you see where your money goes.",
+      "steps": {
+        "one": "Snap or upload any receipt",
+        "two": "Wara’a reads the merchant, items and total",
+        "three": "Ask about your spending in Arabic or English"
+      }
+    },
+    "showPassword": "Show password",
+    "hidePassword": "Hide password",
+    "backHome": "Back to home",
+    "fields": {
+      "email": "Email",
+      "password": "Password",
+      "name": "Name",
+      "nameHint": "Optional, so we know what to call you",
+      "passwordHint": "At least 8 characters",
+      "confirm": "Confirm password"
+    },
+    "validation": {
+      "emailRequired": "Enter your email",
+      "emailInvalid": "That email doesn’t look right",
+      "passwordRequired": "Enter your password",
+      "passwordMin": "Use at least 8 characters",
+      "confirmRequired": "Type the password again",
+      "mismatch": "The passwords don’t match"
+    },
+    "errors": {
+      "invalid": "Email or password is incorrect.",
+      "inactive": "This account is deactivated.",
+      "exists": "There’s already an account with this email. Try logging in.",
+      "rate": "Too many attempts. Wait a minute and try again.",
+      "network": "Can’t reach the server. Check your connection.",
+      "generic": "Something went wrong. Please try again."
+    },
+    "login": {
+      "title": "Welcome back",
+      "subtitle": "Your receipts are right where you left them.",
+      "submit": "Log in",
+      "submitting": "Logging in…",
+      "noAccount": "New here?",
+      "toRegister": "Create an account"
+    },
+    "register": {
+      "title": "Start for free",
+      "subtitle": "One minute, then snap your first receipt.",
+      "submit": "Create account",
+      "submitting": "Creating your account…",
+      "privacy": "Your receipts are only visible to you. You can export or delete everything at any time.",
+      "haveAccount": "Already have an account?",
+      "toLogin": "Log in"
+    }
+  },
+  "dashboard": {
+    "greeting": "Hi there",
+    "greetingNamed": "Hi, {name}",
+    "subtitle": "Here’s where your money went, straight from your receipts.",
+    "scan": "Snap a receipt",
+    "error": {
+      "title": "The page got crumpled",
+      "body": "We couldn’t load your numbers. Your data is safe; let’s try again.",
+      "retry": "Try again"
+    },
+    "waiting": {
+      "title": "Wara’a is still reading",
+      "body": "Your totals appear here once your receipts are read. It usually takes a few seconds."
+    },
+    "hero": {
+      "eyebrow": "{month}",
+      "label": "Spent this month so far",
+      "currency": "Currency",
+      "nothingThisMonth": "No receipts dated this month yet.",
+      "allTime": "All time",
+      "receipts": "Receipts"
+    },
+    "insights": {
+      "title": "At a glance",
+      "fromYourReceipts": "Calculated from your receipts",
+      "topCategory": "Where most of it goes",
+      "topMerchant": "Your most-visited shop",
+      "vsLastMonth": "Compared with last month",
+      "same": "About the same as last month",
+      "higher": "{pct}% more than last month",
+      "lower": "{pct}% less than last month",
+      "partialMonth": "This month so far vs. all of last month",
+      "average": "Average receipt",
+      "averageOf": "{count, plural, one {Across 1 receipt} other {Across {n} receipts}}",
+      "notEnough": "A few more receipts and the patterns show up here."
+    },
+    "ask": {
+      "badge": "AI",
+      "title": "Ask Wara’a",
+      "subtitle": "Answers come from your receipts. Double-check anything important.",
+      "q": {
+        "thisMonth": "How much have I spent this month?",
+        "topMerchant": "Which shop do I spend the most at?",
+        "compare": "Compare this month with last month",
+        "biggest": "What was my biggest receipt?"
+      }
+    },
+    "monthly": {
+      "title": "Month by month",
+      "subtitle": "The last 12 months",
+      "hint": "Tap a month to see its receipts",
+      "empty": "No dated receipts yet",
+      "summary": "{count, plural, one {1 month shown} other {{n} months shown}}. The highest was {peak} at {peakAmount}.",
+      "clickToOpen": "Click to see its receipts"
+    },
+    "categories": {
+      "title": "By category",
+      "subtitle": "Tap a category to see its receipts",
+      "empty": "No categories yet"
+    },
+    "merchants": {
+      "title": "Top shops",
+      "subtitle": "Where you spend most often",
+      "empty": "No shops yet",
+      "unknown": "Unknown shop"
+    },
+    "review": {
+      "title": "{count, plural, one {1 receipt needs a quick look} other {{n} receipts need a quick look}}",
+      "subtitle": "Something wasn’t clear on them. It only takes a moment.",
+      "action": "Check them"
+    },
+    "recent": { "title": "Latest receipts", "all": "See all", "reading": "Reading…", "unknown": "Unknown shop" },
+    "firstRun": {
+      "eyebrow": "Let’s start",
+      "title": "Your first receipt is one photo away",
+      "titleNamed": "Hi {name}! Your first receipt is one photo away",
+      "subtitle": "Snap any receipt, even a crumpled one. Wara’a reads it and your spending picture starts building itself.",
+      "cta": "Snap my first receipt",
+      "steps": {
+        "snap": { "title": "Snap", "body": "A photo, image or PDF." },
+        "read": { "title": "Wara’a reads", "body": "Merchant, date, items and total." },
+        "ask": { "title": "Ask", "body": "“How much went on food?”" }
+      }
+    }
+  },
+  "receipts": {
+    "eyebrow": "Your paper trail",
+    "title": "Receipts",
+    "subtitle": "Every receipt you’ve uploaded, searchable and sorted.",
+    "upload": "Snap a receipt",
+    "searchPlaceholder": "Search shop, item or anything on the receipt…",
+    "searchLabel": "Search receipts",
+    "clearSearch": "Clear search",
+    "searchIgnoresFilters": "Search looks through all your receipts; filters are paused while searching.",
+    "results": "{count, plural, =0 {No results} one {1 result} other {{n} results}}",
+    "count": "{count, plural, =0 {No receipts} one {1 receipt} other {{n} receipts}}",
+    "loadMore": "Show more ({shown} of {total})",
+    "error": {
+      "title": "Couldn’t load your receipts",
+      "body": "They’re safe. It’s just the connection. Try again.",
+      "retry": "Try again"
+    },
+    "noResults": { "title": "Nothing matches “{q}”" },
+    "noMatches": {
+      "title": "No receipts match these filters",
+      "body": "Try a wider date range or fewer filters.",
+      "clear": "Clear everything"
+    },
+    "empty": {
+      "title": "No receipts yet… Wara’a is napping",
+      "body": "Wake it up with your first receipt.",
+      "cta": "Snap a receipt"
+    },
+    "card": {
+      "unknownMerchant": "Unknown shop",
+      "open": "Open receipt: {name}",
+      "reading": "Wara’a is reading this one…",
+      "failed": "Couldn’t read it. Open to try again.",
+      "total": "Total"
+    },
+    "filters": {
+      "status": "Status",
+      "allStatuses": "All",
+      "category": "Category",
+      "dates": "Dates",
+      "presets": { "thisMonth": "This month", "lastMonth": "Last month", "last3": "Last 3 months" },
+      "custom": "Custom",
+      "from": "From",
+      "to": "To",
+      "removeMerchant": "Remove shop filter",
+      "clear": "Clear filters"
+    },
+    "detail": {
+      "loading": "Loading…",
+      "description": "The original next to what Wara’a read from it",
+      "editing": "Fix anything that’s off",
+      "unknownMerchant": "Unknown shop",
+      "printedLabel": "Receipt as read by Wara’a",
+      "noItems": "No line items were found",
+      "taxes": "Tax",
+      "other": "Other charges",
+      "total": "Total",
+      "printedFooter": "Read by Bel War’a",
+      "original": "Original",
+      "zoom": "Zoom",
+      "noOriginal": "No original file for this receipt.",
+      "openPdf": "Open the PDF",
+      "originalAlt": "Photo of the receipt from {name}",
+      "extracted": "What Wara’a read",
+      "processingTitle": "Wara’a is reading…",
+      "processingBody": "This usually takes a few seconds. You can close this; we’ll let you know.",
+      "aiNoticeTitle": "Read by AI.",
+      "aiNoticeBody": "Compare it with the original and fix anything that’s off.",
+      "reviewTitle": "Please check these",
+      "reviewHint": "Fix them with Edit; if everything is already right, saving confirms it.",
+      "failedTitle": "Why it couldn’t be read",
+      "failedBody": "Try reading it again, or delete it and upload a clearer photo.",
+      "fix": "Fix details",
+      "edit": "Edit",
+      "reprocess": "Read again",
+      "reprocessing": "Reading it again…",
+      "reprocessFailed": "Couldn’t start reading it again.",
+      "delete": "Delete",
+      "deleted": "Receipt deleted",
+      "deleteFailed": "Couldn’t delete it. Try again.",
+      "loadFailed": "Couldn’t load this receipt.",
+      "retry": "Try again",
+      "confirmTitle": "Delete this receipt?",
+      "confirmBody": "This removes the receipt, its items and the original file. It can’t be undone.",
+      "cancel": "Keep it",
+      "confirmDelete": "Delete receipt"
+    },
+    "edit": {
+      "required": "Shop, date, total and currency are needed.",
+      "saved": "Saved. Thanks for checking!",
+      "saveFailed": "Couldn’t save. Check the numbers and try again.",
+      "merchant": "Shop",
+      "date": "Date",
+      "category": "Category",
+      "total": "Total",
+      "currency": "Currency",
+      "taxes": "Tax",
+      "items": "Items",
+      "addItem": "Add item",
+      "itemName": "Item",
+      "quantity": "Qty",
+      "lineTotal": "Line total",
+      "removeItem": "Remove item",
+      "sumHint": "Items add up to {sum}; with tax that doesn’t match the total. That’s fine if the receipt has other charges.",
+      "cancel": "Cancel",
+      "saving": "Saving…",
+      "save": "Save"
+    }
+  },
+  "chat": {
+    "title": "Ask Wara’a",
+    "aiBadge": "AI",
+    "aiFootnote": "AI answer from your receipts",
+    "input": {
+      "placeholder": "Ask about your spending…",
+      "label": "Your question",
+      "send": "Send",
+      "hint": "Enter to send · Shift + Enter for a new line"
+    },
+    "thinking": {
+      "searching": "Looking through your receipts…",
+      "slow": "Still on it. Bigger questions take a few extra seconds."
+    },
+    "errors": {
+      "dismiss": "Dismiss",
+      "quota": {
+        "title": "You’ve used this month’s questions",
+        "body": "Your limit resets at the start of next month.",
+        "action": "See usage"
+      },
+      "rate": { "title": "Slow down a little", "body": "Too many questions in a minute. Try again shortly." },
+      "generic": { "title": "Wara’a didn’t catch that", "body": "Something went wrong on our side. Try asking again." }
+    },
+    "threads": {
+      "new": "New conversation",
+      "title": "Conversations",
+      "error": "Couldn’t load past conversations.",
+      "empty": "Your conversations will appear here.",
+      "untitled": "Conversation"
+    },
+    "empty": {
+      "title": "Ask me about your money",
+      "body": "I answer from your own receipts only, in Arabic or English.",
+      "trust": "Answers are generated by AI from your receipt data. Double-check anything important on the Receipts page."
+    },
+    "suggestions": {
+      "thisMonth": "How much have I spent this month?",
+      "topCategory": "What do I spend the most on?",
+      "biggest": "What was my biggest receipt?",
+      "compare": "Compare this month with last month"
+    }
+  },
+  "profile": {
+    "eyebrow": "Your account",
+    "title": "Account",
+    "subtitle": "Your details, preferences and data.",
+    "loadFailed": "Couldn’t load your account.",
+    "noName": "No name yet",
+    "memberSince": "With us since {date}",
+    "phone": "Phone",
+    "logout": "Log out",
+    "plan": {
+      "free": "Free",
+      "pro": "Pro",
+      "title": "Plan and usage",
+      "subtitle": "You’re on the {plan} plan.",
+      "receipts": "Receipts this month",
+      "chat": "Questions this month",
+      "of": "{used} of {limit}",
+      "unlimited": "{used} · unlimited",
+      "reached": "Limit reached. It resets next month.",
+      "resets": "Limits reset on the 1st of every month."
+    },
+    "prefs": {
+      "title": "Preferences",
+      "subtitle": "Saved on this device.",
+      "language": "Language",
+      "theme": "Appearance",
+      "currency": "Preferred currency",
+      "currencySaved": "Dashboard will open in {currency}"
+    },
+    "data": {
+      "title": "Your data",
+      "subtitle": "Everything you’ve uploaded belongs to you. Download it all as a JSON file whenever you like.",
+      "export": "Export my data",
+      "exported": "Your data is downloading",
+      "exportFailed": "Couldn’t export. Try again."
+    },
+    "danger": {
+      "title": "Delete account",
+      "subtitle": "Permanently deletes your account, receipts, files and conversations.",
+      "delete": "Delete my account",
+      "deleted": "Your account has been deleted",
+      "wrongPassword": "That password isn’t right.",
+      "confirmTitle": "Delete your account for good?",
+      "confirmBody": "This permanently deletes your receipts, uploaded files and chat history. It can’t be undone.",
+      "password": "Confirm with your password",
+      "cancel": "Keep my account",
+      "confirm": "Delete forever"
+    }
+  },
+  "errors": {
+    "notFound": {
+      "title": "This page got lost in the receipts",
+      "body": "The link may be old or mistyped.",
+      "home": "Back to home"
+    },
+    "crash": {
+      "title": "Something got crumpled",
+      "body": "An unexpected error happened. Your data is safe.",
+      "retry": "Try again",
+      "home": "Home"
+    }
+  },
+  "landing": {
+    "demoTag": "Example",
+    "nav": {
+      "home": "Bel War’a home",
+      "label": "Sections",
+      "how": "How it works",
+      "features": "Features",
+      "pricing": "Pricing",
+      "faq": "Questions",
+      "openDashboard": "Open dashboard",
+      "login": "Log in",
+      "start": "Start free"
+    },
+    "hero": {
+      "eyebrow": "Your receipts, finally making sense",
+      "title": "Payday came… and <mark>flew away?</mark>",
+      "subtitle": "Snap your receipts and Wara’a shows you where it all went, to the letter.",
+      "cta": "Start free",
+      "ctaApp": "Open my dashboard",
+      "secondary": "See how it works",
+      "note": "Free for up to 30 receipts a month. No card needed.",
+      "longTitle": "Supermarket run",
+      "longItems": ["Bread", "Milk", "Cheese", "Tea", "Snacks", "“Just one thing”"]
+    },
+    "demo": {
+      "merchant": "Al Nour Grocery",
+      "date": "12 Oct 2026",
+      "items": [
+        { "name": "Baladi bread ×10", "total": "20.00" },
+        { "name": "Milk 1L ×2", "total": "70.00" },
+        { "name": "White cheese", "total": "85.00" },
+        { "name": "Tea", "total": "45.00" }
+      ],
+      "totalLabel": "Total",
+      "total": "220.00 EGP"
+    },
+    "capture": {
+      "eyebrow": "Act 2 · Capture",
+      "title": "Snap it. That’s it.",
+      "subtitle": "No typing, no spreadsheets. A photo of the receipt is all Wara’a needs.",
+      "phoneList": "Your receipts",
+      "stamp": "Read",
+      "steps": {
+        "snap": { "title": "Snap or upload", "body": "Camera, gallery or PDF, even several at once." },
+        "read": { "title": "Wara’a reads it", "body": "Merchant, date, every item and the total." },
+        "check": { "title": "You stay in charge", "body": "Anything unclear gets flagged for you to check." }
+      }
+    },
+    "understand": {
+      "eyebrow": "Act 3 · Understanding",
+      "title": "AI reads it. <mark>You decide.</mark>",
+      "body": "Every field Wara’a pulls out is marked as read by AI, right next to the original photo. If something looks off, it flags it so you can fix it in seconds.",
+      "fields": { "merchant": "Merchant", "date": "Date", "items": "Items", "total": "Total" },
+      "points": {
+        "review": { "title": "Flags, not guesses", "body": "Missing totals, odd dates or likely duplicates are marked “check it”." },
+        "edit": { "title": "Edit anything", "body": "Fix a name, a number or an item; your version is what counts." }
+      }
+    },
+    "clarity": {
+      "eyebrow": "Act 4 · Clarity",
+      "title": "Then it all <mark>clicks</mark>.",
+      "body": "See your month at a glance, tap into any category, and ask questions in plain words.",
+      "monthLabel": "October so far",
+      "monthTotal": "4,380.00 EGP",
+      "bars": [
+        { "label": "Groceries", "value": 1640, "amount": "1,640.00" },
+        { "label": "Dining", "value": 1120, "amount": "1,120.00" },
+        { "label": "Transport", "value": 860, "amount": "860.00" },
+        { "label": "Bills", "value": 760, "amount": "760.00" }
+      ],
+      "question": "How much did I spend on groceries this month?",
+      "answer": "So far this month you’ve spent <amt>1,640.00 EGP</amt> on groceries across 9 receipts. Most of it was at Al Nour Grocery.",
+      "aiNote": "AI answer from the receipts"
+    },
+    "features": {
+      "eyebrow": "What you get",
+      "title": "Small app. <mark>Big relief.</mark>",
+      "body": "Built for how people in Egypt and the Gulf actually shop and pay.",
+      "cards": {
+        "currency": { "title": "Every currency stays itself", "body": "Pounds, riyals and dollars are never added together. Each currency gets its own totals." },
+        "review": { "title": "Check before you trust", "body": "Unclear receipts are flagged with the reason, next to the original photo." },
+        "chat": { "title": "Ask in Arabic or English", "body": "“How much went on food?” Wara’a answers from your receipts." },
+        "search": { "title": "Find any receipt", "body": "Search by shop, item or any word printed on the receipt." },
+        "yours": { "title": "Your data is yours", "body": "Export everything as JSON or delete your account whenever you want." }
+      }
+    },
+    "privacy": {
+      "title": "Private by default",
+      "body": "Financial data deserves care. Here’s what we promise, plainly.",
+      "facts": {
+        "isolated": { "title": "Only you see your receipts", "body": "Every request is checked against your account." },
+        "export": { "title": "Take it with you", "body": "Download all your data as a JSON file at any time." },
+        "delete": { "title": "Leave cleanly", "body": "Deleting your account removes your receipts, files and chats." }
+      }
+    },
+    "pricing": {
+      "eyebrow": "Pricing",
+      "title": "Start free. Stay as long as you like.",
+      "body": "The free plan covers most people. A bigger plan is on its way.",
+      "limits": {
+        "receipts": "{n} receipts a month",
+        "chat": "{n} questions to Wara’a a month"
+      },
+      "features": {
+        "all": "Every feature, no trial timer",
+        "currencies": "EGP, SAR, USD and more",
+        "export": "Export and delete anytime"
+      },
+      "free": {
+        "name": "Free",
+        "price": "0 EGP",
+        "note": "Forever. No card needed.",
+        "cta": "Create my account",
+        "ctaApp": "Open my dashboard"
+      },
+      "pro": {
+        "name": "Pro",
+        "soon": "Coming soon",
+        "note": "For heavy spenders and small businesses.",
+        "waitNote": "Not available yet. The free plan has everything in the meantime."
+      }
+    },
+    "faq": {
+      "eyebrow": "Questions",
+      "title": "Good to know",
+      "items": {
+        "free": { "q": "Is it really free?", "a": "Yes. The free plan includes up to 30 receipts and 50 questions to Wara’a every month, with every feature. A Pro plan with higher limits is coming." },
+        "formats": { "q": "What can I upload?", "a": "Photos and images (JPEG, PNG, WebP) or PDF receipts. You can upload several at once from your phone’s camera or gallery." },
+        "accuracy": { "q": "Is the AI always right?", "a": "No, and we don’t pretend it is. That’s why every receipt sits next to its original, unclear ones get flagged with a reason, and you can edit anything." },
+        "privacy": { "q": "Who can see my receipts?", "a": "Only you. Every request is tied to your account. You can export all of your data or delete your account and everything in it at any time." },
+        "currencies": { "q": "I pay in more than one currency", "a": "No problem. Totals are always kept per currency and never mixed. You can switch currencies on the dashboard, or ask Wara’a to convert." },
+        "language": { "q": "Does it work in Arabic?", "a": "Yes. The app is in Arabic and English, and you can ask Wara’a questions in either language." }
+      }
+    },
+    "cta": {
+      "title": "Ready to see where it all goes?",
+      "body": "Your first receipt takes under a minute.",
+      "cta": "Start free",
+      "ctaApp": "Open my dashboard"
+    },
+    "footer": {
+      "tagline": "Every receipt, read and counted. To the letter.",
+      "label": "Footer",
+      "how": "How it works",
+      "pricing": "Pricing",
+      "login": "Log in",
+      "register": "Create account",
+      "copyright": "© {year} Bel War’a · بالورقة"
+    }
+  }
+}
