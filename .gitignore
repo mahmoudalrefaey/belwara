@@ -6,8 +6,7 @@
 # Excluded project folders
 testing/
 uploads/
-receipts_img/
-planning/
+receipts_for_evals
 brand/social
 brand/profile
 # Python
