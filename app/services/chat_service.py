@@ -1,7 +1,10 @@
 """One chat turn: history from the DB → model ⇄ tools loop → reply saved to the DB."""
 
+import logging
 import re
+import time
 import uuid
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -14,6 +17,8 @@ from app.core.llm import client, record_usage
 from app.models.chat import ChatMessage
 from app.services import receipt_service
 from app.services.chat_tools import TOOL_SPECS, build_tools, run_tool
+
+log = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """\
 Your name is Wara'a (in Arabic: ورقة). You are the assistant inside Bel War'a (بالورقة), an app that
@@ -126,7 +131,19 @@ def _history(db: Session, user_id: int, thread_id: str) -> List[dict]:
     return [{"role": m.role, "content": m.content} for m in reversed(rows)]
 
 
-def _run_model(db: Session, user_id: int, messages: List[dict]) -> str:
+@dataclass
+class TurnResult:
+    """One assistant turn, before anything is saved."""
+
+    reply: str
+    tool_trace: List[dict] = field(default_factory=list)  # {"name", "arguments", "result"} per call
+    rounds: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_s: float = 0.0
+
+
+def _run_model(db: Session, user_id: int, messages: List[dict], turn: TurnResult) -> str:
     tools = build_tools(db, user_id)
     for step in range(CHAT_MAX_TOOL_STEPS):
         final_step = step == CHAT_MAX_TOOL_STEPS - 1
@@ -139,6 +156,10 @@ def _run_model(db: Session, user_id: int, messages: List[dict]) -> str:
         record_usage(
             db, user_id=user_id, kind="chat", deployment=CHAT_DEPLOYMENT, usage=response.usage
         )
+        turn.rounds += 1
+        if response.usage is not None:
+            turn.input_tokens += response.usage.prompt_tokens or 0
+            turn.output_tokens += response.usage.completion_tokens or 0
         choice = response.choices[0]
         if choice.finish_reason == "content_filter":
             return _FILTERED_REPLY
@@ -159,12 +180,37 @@ def _run_model(db: Session, user_id: int, messages: List[dict]) -> str:
             ],
         })
         for c in msg.tool_calls:
-            messages.append({
-                "role": "tool",
-                "tool_call_id": c.id,
-                "content": run_tool(db, tools, c.function.name, c.function.arguments),
-            })
+            result = run_tool(db, tools, c.function.name, c.function.arguments)
+            turn.tool_trace.append(
+                {"name": c.function.name, "arguments": c.function.arguments, "result": result}
+            )
+            messages.append({"role": "tool", "tool_call_id": c.id, "content": result})
     return _FALLBACK_REPLY
+
+
+def answer(db: Session, user_id: int, message: str, history: List[dict]) -> TurnResult:
+    """Run one turn against the given history without saving anything (the caller commits)."""
+    message = message.strip()
+    messages = (
+        [{"role": "system", "content": _system_prompt(db, user_id)}]
+        + history
+        + [{"role": "user", "content": message}]
+        + [{"role": "system", "content": _language_hint(message)}]
+    )
+    turn = TurnResult(reply="")
+    started = time.perf_counter()
+    try:
+        turn.reply = _run_model(db, user_id, messages, turn)
+    except BadRequestError as e:
+        if getattr(e, "code", None) != "content_filter":
+            raise
+        turn.reply = _FILTERED_REPLY
+    turn.latency_s = time.perf_counter() - started
+    log.info(
+        "chat_turn rounds=%s tool_calls=%s input_tokens=%s output_tokens=%s latency_s=%.2f",
+        turn.rounds, len(turn.tool_trace), turn.input_tokens, turn.output_tokens, turn.latency_s,
+    )
+    return turn
 
 
 def chat_turn(
@@ -173,25 +219,13 @@ def chat_turn(
     """Returns (assistant_reply, thread_id); a new thread id is created when none is sent."""
     thread_id = (thread_id or "").strip()[:64] or uuid.uuid4().hex
     message = message.strip()
-    messages = (
-        [{"role": "system", "content": _system_prompt(db, user_id)}]
-        + _history(db, user_id, thread_id)
-        + [{"role": "user", "content": message}]
-        + [{"role": "system", "content": _language_hint(message)}]
-    )
-    try:
-        reply = _run_model(db, user_id, messages)
-    except BadRequestError as e:
-        if getattr(e, "code", None) != "content_filter":
-            raise
-        reply = _FILTERED_REPLY
-
+    turn = answer(db, user_id, message, _history(db, user_id, thread_id))
     db.add_all([
         ChatMessage(user_id=user_id, thread_id=thread_id, role="user", content=message),
-        ChatMessage(user_id=user_id, thread_id=thread_id, role="assistant", content=reply),
+        ChatMessage(user_id=user_id, thread_id=thread_id, role="assistant", content=turn.reply),
     ])
     db.commit()
-    return reply, thread_id
+    return turn.reply, thread_id
 
 
 def list_threads(db: Session, user_id: int, limit: int = 50) -> List[dict]:

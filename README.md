@@ -326,7 +326,20 @@ The integration tests run the real SQL, storage, background jobs and HTTP layer 
 **Accuracy is measured, not assumed:**
 
 - `uv run python -m evals.run_receipts` runs real receipts from `evals/receipts/` against `expected.json` (see `evals/expected.example.json`). It prints per-field accuracy (merchant, date, total, currency, category, item count) and saves a result file. Run it before changing the model, the prompt or the schema, and compare against the saved baseline.
-- `uv run python -m evals.run_chat --user-id <id>` asks the questions in `evals/chat_cases.json` as an eval-only user and checks that each reply contains the expected numbers.
+- **Chat evals** run against generated users whose ground truth is known, so expected answers are computed, not typed in:
+
+  ```bash
+  uv run python -m evals.fixtures.generate --pool dev --seed 7          # writes eval-dev-*@belwara.test users
+  uv run python -m evals.fixtures.generate --pool holdout --seed 1001
+  uv run python -m evals.run_chat --split regression                    # or dev, holdout, all; --runs 3
+  uv run python -m evals.run_retrieval                                  # merchant-name matching, no LLM
+  ```
+
+  - *Data.* `evals/fixtures/generate.py` builds six profiles per pool: a household, a traveller with several currencies, a light user, a messy-OCR user, a dormant user and one with nothing readable. They cover every receipt status, taxes, weighed items, missing totals, an invalid currency code and an item whose text tries to give the assistant instructions. Merchant names are damaged by an OCR noise model (`evals/fixtures/noise.py`) whose letter confusions are deliberately broader than anything the matcher folds together. The ground truth stays in `evals/results/fixtures/<pool>.json`; `evals/fixtures/oracle.py` computes expected answers from it in plain Python, independent of the app's SQL.
+  - *Splits.* `regression` rewrites every failure from the chat audit as a generic case. `dev` is used while building. `holdout` was written before the fixes, with its own merchants, seed, question types and wording; it only runs at milestones, and failures there are fixed by class, never case by case.
+  - *Scoring.* Each check counts toward a dimension: retrieval, calculation, tool selection, tool arguments, faithfulness, correctness, Arabic/language, missing or ambiguous data, safety, action safety, efficiency. Every turn is also checked for **critical** failures, which must stay at zero: an amount that appears in no tool result (how model arithmetic and mixed-currency sums show up), a currency the data doesn't support, a merchant the user never visited, unsafe content from injected text, or claiming an action was done. Gates: no critical failures, ≥ 90% overall, ≥ 80% per dimension, p95 latency ≤ 10 s.
+  - *Judge.* Behavior, register and action claims are graded by `evals/judge.py`; everything else is deterministic. Set `EVAL_JUDGE_DEPLOYMENT` to a stronger deployment than the one under test; without it the model judges itself and the report says so, so spot-check its verdicts.
+  - Nothing is saved: turns run through `chat_service.answer()` and are rolled back. `--user-id N --cases file.json` still runs the older expect/forbid format against a real user.
 
 Eval receipts and results are gitignored because they can contain personal data.
 
