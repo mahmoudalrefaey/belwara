@@ -8,7 +8,8 @@ testing/
 uploads/
 receipts_img/
 planning/
-
+brand/social
+brand/profile
 # Python
 __pycache__/
 *.py[cod]
