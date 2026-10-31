@@ -88,6 +88,8 @@ Getting the facts
 - Earlier tool results are not kept between messages. When a follow-up asks for something your
   previous reply didn't state (reasons, items, tax, dates), look it up again.
 - An item's price is its unit_price; line_total is what that line cost (price × quantity).
+- When your answer is about specific receipts (one to five: the biggest one, the ones that need
+  review, the receipt they asked about), attach them with show_receipts so the user can open them.
 - Never add amounts in different currencies together. Report each currency separately, or give the
   converted figure with its label: a conversion at today's rate is approximate, so say so.
 
@@ -172,7 +174,19 @@ def _history(db: Session, user_id: int, thread_id: str) -> List[dict]:
         .limit(CHAT_HISTORY_MESSAGES)
         .all()
     )
-    return [{"role": m.role, "content": m.content} for m in reversed(rows)]
+    history = []
+    for m in reversed(rows):
+        history.append({"role": m.role, "content": m.content})
+        if m.role == "assistant" and m.receipts:
+            # Earlier tool results aren't replayed; this lets "the second one" find its receipt.
+            shown = "; ".join(
+                f"#{c['receipt_id']} {c.get('merchant') or 'unknown merchant'} {c.get('date') or ''} "
+                f"{c.get('total') or ''} {c.get('currency') or ''}".strip()
+                for c in m.receipts
+            )
+            note = f"Receipt cards shown with that reply, in order: {shown}"
+            history.append({"role": "system", "content": note})
+    return history
 
 
 @dataclass
@@ -181,6 +195,7 @@ class TurnResult:
 
     reply: str
     tool_trace: List[dict] = field(default_factory=list)  # {"name", "arguments", "result"} per call
+    receipts: List[dict] = field(default_factory=list)    # cards attached with show_receipts
     rounds: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -188,7 +203,7 @@ class TurnResult:
 
 
 def _run_model(db: Session, user_id: int, messages: List[dict], turn: TurnResult) -> str:
-    tools = build_tools(db, user_id)
+    tools = build_tools(db, user_id, cards=turn.receipts)
     for step in range(CHAT_MAX_TOOL_STEPS):
         final_step = step == CHAT_MAX_TOOL_STEPS - 1
         response = client.chat.completions.create(
@@ -259,17 +274,18 @@ def answer(db: Session, user_id: int, message: str, history: List[dict]) -> Turn
 
 def chat_turn(
     db: Session, user_id: int, message: str, thread_id: Optional[str]
-) -> Tuple[str, str]:
-    """Returns (assistant_reply, thread_id); a new thread id is created when none is sent."""
+) -> Tuple[TurnResult, str]:
+    """Returns (turn, thread_id); a new thread id is created when none is sent."""
     thread_id = (thread_id or "").strip()[:64] or uuid.uuid4().hex
     message = message.strip()
     turn = answer(db, user_id, message, _history(db, user_id, thread_id))
     db.add_all([
         ChatMessage(user_id=user_id, thread_id=thread_id, role="user", content=message),
-        ChatMessage(user_id=user_id, thread_id=thread_id, role="assistant", content=turn.reply),
+        ChatMessage(user_id=user_id, thread_id=thread_id, role="assistant", content=turn.reply,
+                    attachments={"receipts": turn.receipts} if turn.receipts else None),
     ])
     db.commit()
-    return turn.reply, thread_id
+    return turn, thread_id
 
 
 def list_threads(db: Session, user_id: int, limit: int = 50) -> List[dict]:

@@ -95,7 +95,8 @@ def export_user(db: Session, user: User) -> dict:
             for r in receipts
         ],
         "chat_messages": [
-            {"thread_id": m.thread_id, "role": m.role, "content": m.content, "created_at": m.created_at}
+            {"thread_id": m.thread_id, "role": m.role, "content": m.content, "created_at": m.created_at,
+             **({"attachments": m.attachments} if m.attachments else {})}
             for m in messages
         ],
     }

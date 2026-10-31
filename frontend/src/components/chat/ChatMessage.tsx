@@ -7,6 +7,8 @@ import { motion } from "framer-motion";
 import { Sparkles } from "lucide-react";
 import type { ChatMessage as ChatMessageType } from "@/types/api";
 import { LogoMark } from "@/components/brand/Logo";
+import { ChatReceiptCards } from "@/components/chat/ChatReceiptCards";
+import { Link } from "@/i18n/navigation";
 import { useFormat } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -52,11 +54,15 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
-                  a: ({ href, children, ...props }) => (
-                    <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
-                      {children}
-                    </a>
-                  ),
+                  // App paths stay in the app; anything else opens in a new tab.
+                  a: ({ href, children }) =>
+                    href?.startsWith("/") ? (
+                      <Link href={href}>{children}</Link>
+                    ) : (
+                      <a href={href} target="_blank" rel="noopener noreferrer">
+                        {children}
+                      </a>
+                    ),
                   code: ({ children, ...props }) => (
                     <code dir="ltr" {...props}>
                       {children}
@@ -69,6 +75,7 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
             </div>
           )}
         </div>
+        {!isUser && message.receipts?.length ? <ChatReceiptCards receipts={message.receipts} /> : null}
         <p className={cn("flex items-center gap-1.5 px-2 text-[11px] text-muted-foreground", isUser && "justify-end")}>
           {!isUser && (
             <>

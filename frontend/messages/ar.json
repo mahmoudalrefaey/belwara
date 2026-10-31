@@ -445,7 +445,12 @@
       "biggest": "إيه أكبر فاتورة عندي؟",
       "compare": "قارن الشهر ده بالشهر اللي فات"
     },
-    "assistantName": "ورقة"
+    "assistantName": "ورقة",
+    "cards": {
+      "label": "الفواتير في الرد ده",
+      "unknownMerchant": "محل مش معروف",
+      "noDate": "من غير تاريخ"
+    }
   },
   "profile": {
     "eyebrow": "حسابك",

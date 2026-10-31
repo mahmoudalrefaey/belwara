@@ -135,9 +135,21 @@ export interface ChatRequest {
   thread_id?: string;
 }
 
+export interface ChatReceiptCard {
+  receipt_id: number;
+  merchant: string | null;
+  date: string | null;
+  total: string | null;
+  currency: string | null;
+  category: string | null;
+  status: ReceiptStatus;
+  verification: "verified" | "extracted" | "needs_review" | null;
+}
+
 export interface ChatResponse {
   reply: string;
   thread_id: string;
+  receipts?: ChatReceiptCard[];
 }
 
 export interface ChatThreadSummary {
@@ -150,6 +162,7 @@ export interface ChatMessageOut {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  receipts?: ChatReceiptCard[];
 }
 
 /* ─── Client-side models ───────────────────────────────────────────── */
@@ -160,6 +173,7 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   thread_id?: string;
+  receipts?: ChatReceiptCard[];
 }
 
 export interface UserPrefs {

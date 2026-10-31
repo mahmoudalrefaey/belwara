@@ -27,13 +27,13 @@ def chat(
 ):
     quota_service.check(db, user_id, "chat")
     try:
-        reply, thread_id = chat_service.chat_turn(db, user_id, body.message, body.thread_id)
+        turn, thread_id = chat_service.chat_turn(db, user_id, body.message, body.thread_id)
     except APIError:
         log.exception("Chat model call failed")
         raise HTTPException(
             status_code=503, detail="The assistant is temporarily unavailable. Please try again."
         )
-    return ChatResponse(reply=reply, thread_id=thread_id)
+    return ChatResponse(reply=turn.reply, thread_id=thread_id, receipts=turn.receipts)
 
 
 @router.get("/threads", response_model=List[ChatThreadSummary])

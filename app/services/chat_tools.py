@@ -161,6 +161,12 @@ TOOL_SPECS = [
         {},
     ),
     _function(
+        "show_receipts",
+        "Attach up to five receipts to your reply as cards the user can tap to open. Use it when the "
+        "answer is about specific receipts; don't paste links or ids in the text.",
+        {"receipt_ids": {"type": "array", "items": {"type": "integer"}, "description": "1-5 receipt ids."}},
+    ),
+    _function(
         "convert_currency",
         "Convert one amount between currencies at the latest exchange rate.",
         {
@@ -286,8 +292,28 @@ def _merge_spellings(rows: List[dict], leads: Dict[str, str]) -> List[dict]:
 #  TOOLS
 # ═════════════════════════════════════════════════════════════════════════════
 
-def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
-    """Tool name → callable, each closed over this request's db session and user."""
+def receipt_card(r: Receipt) -> dict:
+    """What a receipt card in the chat shows."""
+    return {
+        "receipt_id": r.receipt_id,
+        "merchant": r.merchant_name,
+        "date": _day(r.receipt_date),
+        "total": str(money(r.total_amount)) if r.total_amount is not None else None,
+        "currency": r.currency,
+        "category": r.category,
+        "status": r.status,
+        "verification": r.verification,
+    }
+
+
+def build_tools(
+    db: Session, user_id: int, cards: Optional[List[dict]] = None
+) -> Dict[str, Callable[..., object]]:
+    """
+    Tool name → callable, each closed over this request's db session and user. `cards` collects the
+    receipt cards show_receipts attaches to this turn's reply.
+    """
+    cards = cards if cards is not None else []
 
     def _merchant(name, alternatives, start=None, end=None, category=None):
         """None when no merchant was given; otherwise which stored names the person means."""
@@ -544,6 +570,20 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
             needs_review=[_receipt_row(r) for r in o["needs_review"]],
         )
 
+    def show_receipts(receipt_ids):
+        wanted = list(dict.fromkeys(int(i) for i in receipt_ids))[:5]
+        found = {r.receipt_id: r for r in db.query(Receipt).filter(
+            Receipt.user_id == user_id, Receipt.receipt_id.in_(wanted)).all()} if wanted else {}
+        for rid in wanted:
+            if rid in found and all(c["receipt_id"] != rid for c in cards):
+                cards.append(receipt_card(found[rid]))
+        missing = [i for i in wanted if i not in found]
+        if not found:
+            return _no_results({"receipt_ids": wanted})
+        return _ok(["Some ids are not this user's receipts and were not shown."] if missing else None,
+                   shown=[i for i in wanted if i in found],
+                   note="The cards appear under your reply; there is no need to repeat their details.")
+
     def convert_currency(amount, from_currency, to_currency):
         src, dst = from_currency.strip().upper(), to_currency.strip().upper()
         value = Decimal(str(amount))
@@ -565,6 +605,7 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
         "get_receipt": get_receipt,
         "find_items": find_items,
         "account_overview": account_overview,
+        "show_receipts": show_receipts,
         "convert_currency": convert_currency,
     }
 

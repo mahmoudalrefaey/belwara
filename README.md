@@ -146,6 +146,7 @@ Every tool returns an envelope: `status` (`ok`, `no_results`, `ambiguous`, `erro
 | `get_receipt` | receipt_id | one receipt with line items, items total, tax, charges, missing fields, and whether the items add up |
 | `find_items` | query (+ alternatives), merchant (+ alternatives), start, end, mode (list / summary), sort (newest / highest_price / highest_total), limit | purchases, or per item: times bought, total quantity and total spent |
 | `account_overview` | — | receipts by status (including failed and processing), first and latest receipt dates, currencies, receipts that need review and why |
+| `show_receipts` | receipt_ids (1–5) | attaches the user's own receipts to the reply as cards |
 | `convert_currency` | amount, from, to | converted amount, rate basis and date |
 
 **Finding what people mean** (`app/services/match_service.py`). Merchant and item names are typed by people and stored by OCR, so they rarely match exactly. Every tool that takes a name resolves it against the user's own stored names in layers: exact, then normalized (one form per Arabic letter, no diacritics or tatweel, Western digits, case and accents folded), then "contains" (every word typed appears in the stored name), then fuzzy. Fuzzy matching aligns words by edit distance on the normalized text and on an OCR *skeleton* where letters that print alike are folded together (ب ت ث ن ي, ج ح خ, ع غ ف ق …), so a stored "حواوشى فلاء" is found for "حواوشي علاء" while "حلواني علاء" is not. Words the person typed that the stored name lacks count against it, except business words like مطعم or "store". Stored spellings of one merchant are clustered, so a breakdown by merchant shows one row with its other spellings listed. When two different merchants match about equally well (a shared first name, say), the tool returns `ambiguous` with each one's figures and the assistant asks or reports them separately; a period or category can settle it when only one has receipts there. Below the bar, nothing is returned except "nearest" names. Stored names are never rewritten. The model may pass `alternatives` (the name in the other script, a transliteration, a synonym such as فلافل for طعمية); that is the model's language knowledge, not a dictionary in the code. Thresholds are calibrated on the dev pool of `evals/run_retrieval.py` and checked on the holdout pool (100% hits on exact, typed and typo queries, 0% confident wrong matches). *Limits:* names written only in another script are found only if the model offers the alternative; very short words (four letters or fewer) must match exactly or as an OCR look-alike, so a one-letter typo in a short name is missed; scoring runs in Python over the user's distinct names (a few hundred ms at ~2,000 names), and larger accounts would need a `pg_trgm` prefilter.
@@ -165,7 +166,9 @@ Every tool returns an envelope: `status` (`ok`, `no_results`, `ambiguous`, `erro
 
 ### History
 
-Conversations live in `chat_messages` (user, thread, role, content). The frontend keeps only the current `thread_id`, so history survives restarts and devices. `GET /chat/threads` lists conversations for a history screen.
+Conversations live in `chat_messages` (user, thread, role, content, attachments). The frontend keeps only the current `thread_id`, so history survives restarts and devices. `GET /chat/threads` lists conversations for a history screen.
+
+**Receipt cards.** When an answer is about specific receipts, the model calls `show_receipts` (at most five, and only the user's own; other ids are dropped). The cards are returned with the reply, saved in the assistant message's `attachments`, and shown under the bubble; tapping one opens it at `/receipts?open=<id>`. Tool results aren't replayed into later turns, so the history the model sees includes a one-line note of the cards shown with each earlier reply, in order. That is how "what did I buy in the second one?" finds the right receipt.
 
 ---
 
@@ -191,7 +194,7 @@ Conversations live in `chat_messages` (user, thread, role, content). The fronten
 ```
 users ──< receipt ──< receipt_items
   │
-  ├──< chat_messages        (user_id, thread_id, role, content)
+  ├──< chat_messages        (user_id, thread_id, role, content, attachments)
   └──< llm_usage            (user_id, kind, deployment, input_tokens, output_tokens)
 
 fx_rates                    (rate_date, currency, usd_rate) — historical exchange-rate cache
@@ -322,8 +325,8 @@ All routes except register, login and `/health` need `Authorization: Bearer <tok
 | POST | `/receipts/{id}/reprocess` | Re-run extraction on a `failed` or `needs_review` receipt |
 | GET | `/receipts/{id}/image` | The original upload (owner only) |
 | DELETE | `/receipts` | Delete all; body `{"confirm": "DELETE_ALL_RECEIPTS"}` |
-| POST | `/chat` | `{message, thread_id?}` → `{reply, thread_id}` |
-| GET | `/chat/threads`, `/chat/threads/{id}` | Conversation list and messages |
+| POST | `/chat` | `{message, thread_id?}` → `{reply, thread_id, receipts}` (receipt cards attached to the reply) |
+| GET | `/chat/threads`, `/chat/threads/{id}` | Conversation list and messages (with their receipt cards) |
 | GET | `/health` | Liveness probe |
 
 Error responses worth handling in clients: `402` quota reached, `429` rate limited, `503` assistant temporarily unavailable.

@@ -1,7 +1,7 @@
 """Request/response models for the chat endpoints."""
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,9 +15,23 @@ class ChatRequest(BaseModel):
     )
 
 
+class ChatReceiptCard(BaseModel):
+    """A receipt attached to a reply; the app opens it at /receipts?open=<receipt_id>."""
+
+    receipt_id: int
+    merchant: Optional[str] = None
+    date: Optional[str] = None
+    total: Optional[str] = None
+    currency: Optional[str] = None
+    category: Optional[str] = None
+    status: str
+    verification: Optional[str] = None
+
+
 class ChatResponse(BaseModel):
     reply: str
     thread_id: str
+    receipts: List[ChatReceiptCard] = []
 
 
 class ChatThreadSummary(BaseModel):
@@ -32,3 +46,4 @@ class ChatMessageOut(BaseModel):
     role: Literal["user", "assistant"]
     content: str
     created_at: datetime
+    receipts: List[ChatReceiptCard] = []

@@ -538,3 +538,38 @@ def test_migration_flags_codes_that_are_not_currencies_and_keeps_them():
         ("TUR", "needs_review", ["invalid_currency"]),  # flagged, value kept as stored
         ("XYZ", "failed", None),                        # unreadable uploads are left alone
     ]
+
+
+def test_receipt_cards_are_scoped_saved_and_noted_for_follow_ups(monkeypatch):
+    calls = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            call = SimpleNamespace(id="c1", function=SimpleNamespace(
+                name="show_receipts", arguments=json.dumps({"receipt_ids": [mine, theirs]})))
+            return _completion(SimpleNamespace(content=None, tool_calls=[call]), "tool_calls")
+        return _completion(SimpleNamespace(content="Here it is.", tool_calls=None))
+
+    monkeypatch.setattr(chat_service.client.chat.completions, "create", fake_create)
+    from app.main import app
+
+    with TestClient(app) as client:
+        h = _auth(client)
+        db = SessionLocal()
+        uid = db.query(User.user_id).filter(User.email == "a@x.com").scalar()
+        mine = _receipt(db, uid, "Carrefour", 123.45)
+        theirs = _receipt(db, _user(db, "b@x.com"), "Secret Shop", 9999)
+        db.close()
+
+        body = client.post("/chat", headers=h, json={"message": "Show my receipt"}).json()
+        assert [c["receipt_id"] for c in body["receipts"]] == [mine]  # another user's id is dropped
+        assert body["receipts"][0]["total"] == "123.45"
+        history = client.get(f"/chat/threads/{body['thread_id']}", headers=h).json()
+        assert history[1]["receipts"][0]["merchant"] == "Carrefour"
+
+        calls.clear()
+        client.post("/chat", headers=h, json={"message": "and that one?", "thread_id": body["thread_id"]})
+        notes = [m["content"] for m in calls[0]["messages"] if m["role"] == "system"]
+        assert any(f"#{mine} Carrefour" in n for n in notes)
+        assert "Secret Shop" not in json.dumps(calls[0]["messages"], ensure_ascii=False)

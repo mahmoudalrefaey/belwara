@@ -445,7 +445,12 @@
       "biggest": "What was my biggest receipt?",
       "compare": "Compare this month with last month"
     },
-    "assistantName": "Wara’a"
+    "assistantName": "Wara’a",
+    "cards": {
+      "label": "Receipts in this answer",
+      "unknownMerchant": "Unknown shop",
+      "noDate": "No date"
+    }
   },
   "profile": {
     "eyebrow": "Your account",
