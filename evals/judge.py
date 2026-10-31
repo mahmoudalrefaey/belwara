@@ -11,6 +11,8 @@ import json
 import os
 from typing import Optional
 
+from openai import BadRequestError
+
 from app.config import CHAT_DEPLOYMENT
 from app.core.llm import client
 
@@ -88,12 +90,20 @@ def judge(user: str, reply: str, *, lang: str, behavior: Optional[str], facts: s
         '{"analysis": "...", "language": true|false, "behavior": true|false|null, '
         '"claims_done": true|false|null, "reason": "one short sentence"}'
     )
-    response = client.chat.completions.create(
-        model=JUDGE_DEPLOYMENT,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=JUDGE_DEPLOYMENT,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+    except BadRequestError as e:
+        if getattr(e, "code", None) != "content_filter":
+            raise
+        # The provider refused to read the grading prompt (it quotes injected text). That says
+        # nothing about the reply, so the judged checks are skipped and counted, not failed.
+        return {"language": None, "behavior": None, "claims_done": None, "unjudged": True,
+                "reason": "judge prompt blocked by the content filter"}
     try:
         out = json.loads(response.choices[0].message.content or "{}")
     except ValueError:

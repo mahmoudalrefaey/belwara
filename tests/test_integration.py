@@ -511,6 +511,7 @@ def test_unknown_merchant_says_what_was_searched_and_items_use_alternatives():
     assert out["status"] == "no_results" and out["searched"]["merchant"] == "Spinneys"
 
     items = {"query": "milk", "query_alternatives": None, "merchant": None, "merchant_alternatives": None,
+             "category": None,
              "start": None, "end": None, "mode": "summary", "sort": None, "limit": 10}
     assert _tool(a, "find_items", **items)["status"] == "no_results"
     out = _tool(a, "find_items", **{**items, "query_alternatives": ["لبن", "حليب"]})
@@ -778,3 +779,77 @@ def test_chat_shows_pending_actions_and_remembers_what_happened(monkeypatch):
         db = SessionLocal()
         assert db.query(ChatAction).count() == 0
         db.close()
+
+
+def test_receipt_lists_carry_their_total_and_items_filter_by_category():
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    for amount in (10, 20, 30):
+        _receipt(db, a, "Cafe", amount, category="dining", items=[("Latte", amount)])
+    _receipt(db, a, "Shop", 99, items=[("Latte beans", 99)])
+    db.close()
+    out = _tool(a, "find_receipts", start=None, end=None, merchant="Cafe", merchant_alternatives=None,
+                category=None, currency=None, status=None, text=None, sort=None, limit=2)
+    assert len(out["receipts"]) == 2  # only two rows shown...
+    assert out["totals_of_all_matching"][0]["total"] == "60.00"  # ...but the total covers all three
+
+    items = {"query": "latte", "query_alternatives": None, "merchant": None, "merchant_alternatives": None,
+             "category": "dining", "start": None, "end": None, "mode": "summary", "sort": None, "limit": 10}
+    out = _tool(a, "find_items", **items)
+    assert [(i["item"], i["spent"]) for i in out["items"]] == [("Latte", "60.00")]
+
+
+def test_merchant_breakdown_converted_to_one_currency(monkeypatch):
+    from app.services import fx_service
+
+    rates = {"USD": Decimal(1), "EGP": Decimal(50), "SAR": Decimal("3.75")}
+    monkeypatch.setattr(fx_service, "current_rates", lambda: ("2026-10-30", rates))
+    monkeypatch.setattr(fx_service, "historical_rates", lambda db, day, fetch=True: None)
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    _receipt(db, a, "Careem Ride", 100)
+    _receipt(db, a, "Careem Rlde", 50)  # OCR spelling of the same merchant
+    _receipt(db, a, "Careem Ride", 15, currency="SAR")
+    db.close()
+    out = _tool(a, "spending_summary", **{**SUMMARY, "merchant": "كريم", "merchant_alternatives": ["Careem"],
+                                          "group_by": "merchant", "convert_to": "EGP"})
+    assert out["status"] == "ok"
+    [row] = out["converted"]["rows"]
+    assert row["total"] == "350.00" and out["converted"]["approximate"] is True  # 150 EGP + 15 SAR × 50/3.75
+
+
+def test_a_shop_named_as_an_item_finds_the_shop_and_lookups_are_remembered(monkeypatch):
+    calls = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            args = {k: None for k in ("start", "end", "merchant", "merchant_alternatives", "category",
+                                      "currency", "text", "sort")}
+            call = SimpleNamespace(id="c1", function=SimpleNamespace(
+                name="find_receipts", arguments=json.dumps({**args, "status": "counted", "limit": 5})))
+            return _completion(SimpleNamespace(content=None, tool_calls=[call]), "tool_calls")
+        return _completion(SimpleNamespace(content="You have one receipt.", tool_calls=None))
+
+    monkeypatch.setattr(chat_service.client.chat.completions, "create", fake_create)
+    from app.main import app
+
+    with TestClient(app) as client:
+        h = _auth(client)
+        db = SessionLocal()
+        a = db.query(User.user_id).filter(User.email == "a@x.com").scalar()
+        rid = _receipt(db, a, "كبدة علاء", 45, category="dining", items=[("ساندوتش كبدة", 25), ("بيبسي", 20)])
+        db.close()
+
+        items = {"query": "كبده علاء", "query_alternatives": None, "merchant": None,
+                 "merchant_alternatives": None, "category": None, "start": None, "end": None, "mode": "list",
+                 "sort": None, "limit": 10}
+        out = _tool(a, "find_items", **items)
+        assert out["status"] == "ok" and {i["item"] for i in out["items"]} == {"ساندوتش كبدة", "بيبسي"}
+        assert out["items"][0]["price_per_unit"] and "paid_for_line" in out["items"][0]
+
+        body = client.post("/chat", headers=h, json={"message": "my receipts?"}).json()
+        calls.clear()
+        client.post("/chat", headers=h, json={"message": "why that one?", "thread_id": body["thread_id"]})
+        notes = " ".join(m["content"] for m in calls[0]["messages"] if m["role"] == "system")
+        assert f"Receipts looked up for that reply: #{rid} كبدة علاء" in notes

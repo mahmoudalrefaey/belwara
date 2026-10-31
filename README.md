@@ -23,7 +23,8 @@ Bel War’a (Egyptian Arabic for “on paper, to the letter”) turns photos and
 12. [Testing and accuracy evaluation](#testing-and-accuracy-evaluation)
 13. [Deploying to Azure](#deploying-to-azure)
 14. [Design decisions](#design-decisions)
-15. [Roadmap](#roadmap)
+15. [Known limitations of the assistant](#known-limitations-of-the-assistant)
+16. [Roadmap](#roadmap)
 
 ---
 
@@ -252,20 +253,30 @@ app/
 ├── main.py              app setup, CORS, health check, restart recovery, telemetry
 ├── config.py            all settings, read once from .env
 ├── api/v1/              users.py, receipts.py, chat.py (thin HTTP layer)
-├── core/                database, auth dependencies, JWT/password, rate limits, llm.py (Azure client)
-├── models/              users, receipt (+items), chat_messages, llm_usage
+├── core/                database, auth dependencies, JWT/password, rate limits, llm.py (Azure client),
+│                        currencies.py (ISO 4217)
+├── models/              users, receipt (+items), chat_messages, chat_actions, fx_rates, llm_usage
 ├── schemas/             Pydantic request/response contracts
 └── services/
     ├── extract_service.py   image/PDF prep, the vision call, deterministic checks
     ├── upload_service.py    accept uploads, background pipeline, stale-job recovery
-    ├── receipt_service.py   queries, search, aggregates, dashboard
-    ├── chat_service.py      the model ⇄ tools loop and history
-    ├── chat_tools.py        tool schemas and per-user tool binding
+    ├── receipt_service.py   queries, search, aggregates (Decimal), dashboard
+    ├── match_service.py     which stored merchant/item names a person means (OCR-aware)
+    ├── fx_service.py        exchange rates with an explicit basis (historical or today's)
+    ├── chat_service.py      the prompt, the model ⇄ tools loop, history and its notes
+    ├── chat_tools.py        tool schemas, result envelopes, per-user tool binding
+    ├── action_service.py    changes proposed in the chat and confirmed by the user
     ├── quota_service.py     monthly plan limits
     ├── storage_service.py   Azure Blob or local folder
     └── user_service.py      accounts, export, deletion
-alembic/versions/001_baseline.py   full schema
-evals/                accuracy evaluation scripts
+alembic/versions/        001 baseline … 006 chat actions
+evals/
+├── fixtures/            generated eval users: pools, OCR noise, generator, oracle
+├── cases/               regression, dev and holdout conversations
+├── grading.py · judge.py
+├── run_chat.py          chat evals by split and dimension, with critical gates
+├── run_retrieval.py     name-matching accuracy without the LLM
+└── run_receipts.py      extraction accuracy on real receipts
 tests/                unit and integration tests
 frontend/             Next.js app (Arabic/English, RTL)
 Dockerfile · .github/workflows/ci.yml
@@ -373,7 +384,7 @@ The integration tests run the real SQL, storage, background jobs and HTTP layer 
   - *Splits.* `regression` rewrites every failure from the chat audit as a generic case. `dev` is used while building. `holdout` was written before the fixes, with its own merchants, seed, question types and wording; it only runs at milestones, and failures there are fixed by class, never case by case.
   - *Scoring.* Each check counts toward a dimension: retrieval, calculation, tool selection, tool arguments, faithfulness, correctness, Arabic/language, missing or ambiguous data, safety, action safety, efficiency. Every turn is also checked for **critical** failures, which must stay at zero: an amount that appears in no tool result (how model arithmetic and mixed-currency sums show up), a currency the data doesn't support, a merchant the user never visited, unsafe content from injected text, or claiming an action was done. Gates: no critical failures, ≥ 90% overall, ≥ 80% per dimension, p95 latency ≤ 10 s.
   - *Judge.* Behavior, register and action claims are graded by `evals/judge.py`; everything else is deterministic. Set `EVAL_JUDGE_DEPLOYMENT` to a stronger deployment than the one under test; without it the model judges itself and the report says so, so spot-check its verdicts.
-  - Nothing is saved: turns run through `chat_service.answer()` and are rolled back. `--user-id N --cases file.json` still runs the older expect/forbid format against a real user.
+  - Nothing is saved: turns run through `chat_service.answer()` and are rolled back, with the same history notes (receipt cards, action outcomes) a real conversation gets. Calls the endpoint refuses for capacity (429, timeouts) are retried with backoff; a turn that still can't run is reported as *not run* and left out of every score, so a rate limit never reads as a wrong answer. `--user-id N --cases file.json` still runs the older expect/forbid format against a real user.
 
 Eval receipts and results are gitignored because they can contain personal data.
 
@@ -406,10 +417,23 @@ CI (`.github/workflows/ci.yml`) runs lint, all tests against a Postgres service,
 
 - **One vision call instead of OCR then parsing.** Plain-text OCR loses layout, which is what separates a total from a payment line. The model reads the image directly and returns typed JSON.
 - **Flag, don't reject.** Users prefer fixing one field to re-uploading. Flagged receipts still count in totals, and the dashboard and chat call them out so the numbers aren't trusted blindly.
-- **Code computes, the model phrases.** Sums, averages and trends come from SQL; the model chooses a tool and writes the sentence.
+- **Code computes, the model phrases.** Sums, averages, differences, conversions and trends come from backend code; the model chooses a tool and writes the sentence. Where the model was tempted to add things up, the fix was a tool field (a list's total, a period's daily average), not a sterner prompt.
 - **Fixed tools over generated SQL.** A small set of typed tools covers the questions people ask about receipts, and they can be tested and scoped to a user in code.
 - **A status column instead of a job queue.** It gives progress in the UI, restart recovery and retries with no extra infrastructure.
-- **No agents framework, no vector database.** The data is small and structured; SQL is the right retrieval layer.
+- **No agents framework, no vector database.** The data is small and structured; SQL plus a lexical, OCR-aware name matcher is the right retrieval layer. Embeddings stay an option for cross-script names if the evals show the model's alternatives aren't enough.
+- **Measure before changing.** Every change to the assistant was made against the eval suite, and failures on the holdout split are fixed by class and then confirmed on a fresh holdout seed.
+
+---
+
+## Known limitations of the assistant
+
+- **The judge grades itself.** Only `gpt-4.1-mini` (the model under test) and `gpt-4.1-nano` are deployed, so behaviour and register are judged by the same model. Hand review of failed verdicts found it wrong in both directions (it failed correct refusals and correct "approximately" conversions). Deterministic checks (numbers, currencies, tools, arguments, retrieval) don't depend on it. Set `EVAL_JUDGE_DEPLOYMENT` to a stronger deployment for trustworthy behaviour scores.
+- **Exchange rates are today's.** Historical rates need a paid CurrencyFreaks plan. Every conversion says it is approximate and at today's rate, and the exact per-currency amounts are given first.
+- **Names in another script** (ماريوت for a receipt printed "Marriott") are found only when the model offers that spelling as an alternative; there is no transliteration in code.
+- **Short names** (four letters or fewer) match only exactly or as an OCR look-alike, so a one-letter typo in a short name is missed rather than risk a wrong merchant.
+- **Ambiguous questions** are answered with an interpretation: "where do I spend the most?" may be answered by category rather than by shop.
+- **Receipts with no readable merchant** can't be attributed to a merchant; they are counted in totals and listed as needing review.
+- **Only three changes** can be made from the chat (category, mark reviewed, delete). Amounts, items, names and dates are corrected on the receipt itself.
 
 ---
 

@@ -17,7 +17,7 @@ from app.core.llm import client, record_usage
 from app.models.chat import ChatMessage
 from app.models.chat_action import ChatAction
 from app.services import action_service, receipt_service
-from app.services.chat_tools import TOOL_SPECS, build_tools, run_tool
+from app.services.chat_tools import TOOL_SPECS, build_tools, referenced_receipts, run_tool
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +77,9 @@ Getting the facts
   * change between periods: spending_summary with compare_start/compare_end (difference, percent_change)
   * how much was spent on an item, how many were bought: find_items with mode=summary
   * one currency across several: spending_summary with convert_to, only when the user asks for a
-    single figure in one currency or to rank across currencies; otherwise report each currency
+    single figure in one currency or to rank across currencies; otherwise report each currency.
+    When you give a converted figure, give the exact amount in each original currency first and the
+    conversion after it, labelled as approximate at today's rate.
   If no tool gives the number, say you can't work it out exactly rather than calculating it.
 - "Biggest", "most expensive", "latest", "first", "cheapest": use the sort option, not the order of
   some other list. Rank amounts only within one currency.
@@ -93,7 +95,10 @@ Getting the facts
 - Never say the user has no receipts or no spending without checking first.
 - Earlier tool results are not kept between messages. When a follow-up asks for something your
   previous reply didn't state (reasons, items, tax, dates), look it up again.
-- An item's price is its unit_price; line_total is what that line cost (price × quantity).
+- An item's price is its price_per_unit; paid_for_line is what that line cost (price × quantity).
+- Receipt ids come only from tool results or the notes about earlier replies. Never guess one.
+- To check whether a receipt is right, or what is on it, use get_receipt: it says whether the items
+  add up and what is missing.
 - When your answer is about specific receipts (one to five: the biggest one, the ones that need
   review, the receipt they asked about), attach them with show_receipts so the user can open them.
 - Never add amounts in different currencies together. Report each currency separately, or give the
@@ -184,11 +189,16 @@ def _history(db: Session, user_id: int, thread_id: str) -> List[dict]:
     for m in reversed(rows):
         history.append({"role": m.role, "content": m.content})
         if m.role == "assistant":
-            history += reply_notes(m.receipts, m.actions)
+            history += reply_notes(m.receipts, m.actions, (m.attachments or {}).get("referenced", []))
     return history
 
 
-def reply_notes(receipts: List[dict], actions: List[ChatAction]) -> List[dict]:
+def _receipt_line(c: dict) -> str:
+    return (f"#{c['receipt_id']} {c.get('merchant') or 'unknown merchant'} {c.get('date') or ''} "
+            f"{c.get('total') or ''} {c.get('currency') or ''}").strip()
+
+
+def reply_notes(receipts: List[dict], actions: List[ChatAction], referenced: List[dict] = ()) -> List[dict]:
     """
     What the model should remember about an earlier reply beyond its text. Tool results aren't
     replayed, so this is how "the second one" finds its receipt and how Wara'a knows whether a
@@ -196,12 +206,13 @@ def reply_notes(receipts: List[dict], actions: List[ChatAction]) -> List[dict]:
     """
     notes = []
     if receipts:
-        shown = "; ".join(
-            f"#{c['receipt_id']} {c.get('merchant') or 'unknown merchant'} {c.get('date') or ''} "
-            f"{c.get('total') or ''} {c.get('currency') or ''}".strip()
-            for c in receipts
-        )
+        shown = "; ".join(_receipt_line(c) for c in receipts)
         notes.append({"role": "system", "content": f"Receipt cards shown with that reply, in order: {shown}"})
+    shown_ids = {c["receipt_id"] for c in receipts}
+    looked_up = [c for c in referenced if c["receipt_id"] not in shown_ids]
+    if looked_up:
+        lines = "; ".join(_receipt_line(c) for c in looked_up)
+        notes.append({"role": "system", "content": f"Receipts looked up for that reply: {lines}"})
     if actions:
         notes.append({"role": "system", "content": " ".join(action_service.describe(a) for a in actions)})
     return notes
@@ -214,6 +225,7 @@ class TurnResult:
     reply: str
     tool_trace: List[dict] = field(default_factory=list)  # {"name", "arguments", "result"} per call
     receipts: List[dict] = field(default_factory=list)    # cards attached with show_receipts
+    referenced: List[dict] = field(default_factory=list)  # receipts the tools returned this turn
     actions: List[ChatAction] = field(default_factory=list)  # changes proposed (pending)
     rounds: int = 0
     input_tokens: int = 0
@@ -262,6 +274,9 @@ def _run_model(db: Session, user_id: int, messages: List[dict], turn: TurnResult
             turn.tool_trace.append(
                 {"name": c.function.name, "arguments": c.function.arguments, "result": result}
             )
+            seen = {r["receipt_id"] for r in turn.referenced}
+            turn.referenced += [r for r in referenced_receipts(result) if r["receipt_id"] not in seen][
+                : max(0, 10 - len(turn.referenced))]
             messages.append({"role": "tool", "tool_call_id": c.id, "content": result})
     return _FALLBACK_REPLY
 
@@ -298,8 +313,9 @@ def chat_turn(
     thread_id = (thread_id or "").strip()[:64] or uuid.uuid4().hex
     message = message.strip()
     turn = answer(db, user_id, message, _history(db, user_id, thread_id))
+    attachments = {k: v for k, v in (("receipts", turn.receipts), ("referenced", turn.referenced)) if v}
     reply = ChatMessage(user_id=user_id, thread_id=thread_id, role="assistant", content=turn.reply,
-                        attachments={"receipts": turn.receipts} if turn.receipts else None)
+                        attachments=attachments or None)
     db.add_all([ChatMessage(user_id=user_id, thread_id=thread_id, role="user", content=message), reply])
     db.flush()
     for a in turn.actions:

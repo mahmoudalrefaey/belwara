@@ -20,6 +20,7 @@ from typing import Callable, Dict, List, Optional
 
 from sqlalchemy.orm import Session
 
+from app.core.currencies import ISO_4217
 from app.models.receipt import COUNTED_STATUSES, Receipt
 from app.services import action_service, fx_service, match_service, receipt_service
 from app.services.receipt_service import money
@@ -139,14 +140,15 @@ TOOL_SPECS = [
     ),
     _function(
         "find_items",
-        "Purchased line items. mode=list gives each purchase (unit_price is the price of one, "
-        "line_total is what that line cost: unit_price × quantity); mode=summary groups by item with "
+        "Purchased line items. mode=list gives each purchase (price_per_unit is the price of one unit "
+        "or kg; paid_for_line is price_per_unit × quantity); mode=summary groups by item with "
         "times bought, total quantity and total spent.",
         {
             "query": _nullable("string", "Item name as the user wrote it, or null for all items."),
             "query_alternatives": _ALTERNATIVES,
             "merchant": _MERCHANT,
             "merchant_alternatives": _ALTERNATIVES,
+            "category": _CATEGORY,
             **_DATE_RANGE,
             "mode": {"type": "string", "enum": ["list", "summary"]},
             "sort": _nullable("string", "For mode=list (default newest).",
@@ -241,7 +243,8 @@ def _receipt_row(r: Receipt) -> dict:
         "merchant": r.merchant_name,
         "date": _day(r.receipt_date),
         "total": money(r.total_amount),
-        "currency": r.currency,
+        "currency": (r.currency if not r.currency or r.currency in ISO_4217
+                     else f"{r.currency} (not a valid code)"),
         "tax": money(r.total_taxes),
         "category": r.category,
         "status": r.status,
@@ -271,6 +274,9 @@ def _quality_notes(rows: List[dict]) -> List[str]:
                          f"{r['currency']} are included but still need the user's review.")
     if any(r["currency"] is None for r in rows):
         notes.append("Some receipts have no currency; they are listed with currency null.")
+    for code in sorted({r["currency"] for r in rows if r["currency"] and r["currency"] not in ISO_4217}):
+        notes.append(f"'{code}' is not a real currency code (the receipt needs review), so its amount "
+                     "can't be stated in any currency. Say it's invalid; don't guess which one it is.")
     return notes
 
 
@@ -283,7 +289,7 @@ def _merge_spellings(rows: List[dict], leads: Dict[str, str]) -> List[dict]:
     merged: Dict[tuple, dict] = {}
     for r in rows:
         lead = leads.get(r["group"], r["group"])
-        key = (lead, r["currency"])
+        key = (lead, r.get("currency"))  # converted rows are all in one currency and carry none
         if key not in merged:
             merged[key] = {**r, "group": lead}
         else:
@@ -427,7 +433,8 @@ def build_tools(
                 if not group_by:
                     for r in rows:
                         r["daily_average"] = money(r["total"] / days)
-        if convert_to and group_by in (None, "merchant", "category", "month"):
+        already_there = convert_to and {r["currency"] for r in rows} == {convert_to.strip().upper()}
+        if convert_to and not already_there and group_by in (None, "merchant", "category", "month"):
             out["converted"] = _converted(group_by, convert_to, start=s, end=e, **filters)
             if leads:
                 out["converted"]["rows"] = _merge_spellings(out["converted"]["rows"], leads)
@@ -495,6 +502,14 @@ def build_tools(
         extra = {"match": match.describe()} if match else {}
         if not rows:
             return _no_results(searched, **extra, **_data_span(_date(start), _date(end)))
+        if statuses == COUNTED_STATUSES and not text:
+            # The sum of every matching receipt, so a list never needs adding up by hand.
+            extra["totals_of_all_matching"] = [
+                {k: r[k] for k in ("currency", "total", "receipts", "missing_total", "needs_review")}
+                for r in receipt_service.spending_summary(
+                    db, user_id, start=kwargs["start"], end=kwargs["end"], merchants=kwargs["merchants"],
+                    category=category, currency=currency)
+            ]
         return _ok(sort=sort, total_matching=total, receipts=[_receipt_row(r) for r in rows], **extra)
 
     def get_receipt(receipt_id):
@@ -505,8 +520,8 @@ def build_tools(
         row = _receipt_row(r)
         row.update(
             other_charges=money(r.other),
-            items=[{"name": i.item_name, "quantity": i.quantity, "unit_price": money(i.unit_price),
-                    "line_total": money(i.line_total)} for i in r.items],
+            items=[{"name": i.item_name, "quantity": i.quantity, "price_per_unit": money(i.unit_price),
+                    "paid_for_line": money(i.line_total)} for i in r.items],
             items_total=items_total,
             link=f"/receipts?open={r.receipt_id}",
         )
@@ -522,9 +537,10 @@ def build_tools(
                          + (" and are flagged for review." if r.status == "needs_review" else "."))
         return _ok(notes, receipt=row)
 
-    def find_items(query, query_alternatives, merchant, merchant_alternatives, start, end, mode, sort, limit):
+    def find_items(query, query_alternatives, merchant, merchant_alternatives, category, start, end, mode,
+                   sort, limit):
         s, e = _date(start), _date(end)
-        searched = {"query": query, "merchant": merchant, "start": start, "end": end}
+        searched = {"query": query, "merchant": merchant, "category": category, "start": start, "end": end}
         match = _merchant(merchant, merchant_alternatives, s, e)
         if match and match.status == "no_results":
             return _no_results(searched, match=match.describe())
@@ -537,12 +553,21 @@ def build_tools(
         if query:
             found = match_service.match_names(
                 query, query_alternatives, receipt_service.item_names(db, user_id, merchants=merchants,
-                                                                      start=s, end=e), union=True)
+                                                                      category=category, start=s, end=e),
+                union=True)
             extra["item_match"] = found.describe()
-            if found.status != "ok":
+            if found.status != "ok" and not merchant:
+                # Nothing bought by that name; if it names a shop the user goes to, they meant the shop.
+                shop = _merchant(query, query_alternatives, s, e)
+                if shop and shop.status == "ok":
+                    merchants, query = shop.matched, None
+                    extra = {"match": shop.describe(), "note": "No item has that name, but a merchant "
+                             "does; these are the items bought there."}
+                    found = None
+            if found is not None and found.status != "ok":
                 return _no_results(searched, **extra)
-            names = found.matched
-        kwargs = dict(names=names, merchants=merchants, start=s, end=e)
+            names = found.matched if found is not None else None
+        kwargs = dict(names=names, merchants=merchants, category=category, start=s, end=e)
         if mode == "summary":
             rows = receipt_service.item_summary(db, user_id, **kwargs)
             if not rows:
@@ -563,8 +588,9 @@ def build_tools(
         if not rows:
             return _no_results(searched, **extra)
         return _ok(items=[{
-            "item": r["item_name"], "quantity": r["quantity"], "unit_price": money(r["unit_price"]),
-            "line_total": money(r["line_total"]), "currency": r["currency"], "merchant": r["merchant_name"],
+            "item": r["item_name"], "quantity": r["quantity"], "price_per_unit": money(r["unit_price"]),
+            "paid_for_line": money(r["line_total"]), "currency": r["currency"],
+            "merchant": r["merchant_name"],
             "date": _day(r["receipt_date"]), "receipt_id": r["receipt_id"],
             "verification": _verification(r["status"], r["confirmed_at"]),
         } for r in rows], **extra)
@@ -635,6 +661,29 @@ def build_tools(
         "propose_action": propose_action,
         "convert_currency": convert_currency,
     }
+
+
+def referenced_receipts(result_json: str, limit: int = 10) -> List[dict]:
+    """Receipts a tool result mentions, compactly, so later turns can refer back to them by id."""
+    found: Dict[int, dict] = {}
+
+    def walk(node):
+        if isinstance(node, dict):
+            rid = node.get("receipt_id")
+            if isinstance(rid, int) and rid not in found and len(found) < limit:
+                found[rid] = {k: node.get(k) for k in ("receipt_id", "merchant", "date", "total", "currency")
+                              if node.get(k) is not None}
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    try:
+        walk(json.loads(result_json))
+    except ValueError:
+        pass
+    return list(found.values())
 
 
 def run_tool(db: Session, tools: Dict[str, Callable[..., object]], name: str, arguments: str) -> str:

@@ -335,7 +335,7 @@ def merchant_names(
 
 def item_names(
     db: Session, user_id: int, *, merchants: Optional[Sequence[str]] = None,
-    start: Optional[date] = None, end: Optional[date] = None,
+    category: Optional[str] = None, start: Optional[date] = None, end: Optional[date] = None,
 ) -> List[Tuple[str, int]]:
     """(stored item name, times bought) among counted receipts in scope."""
     q = (
@@ -343,7 +343,7 @@ def item_names(
         .join(Receipt, ReceiptItem.receipt_id == Receipt.receipt_id)
         .filter(Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES))
     )
-    q = _filter_receipts(q, start=start, end=end, merchants=merchants)
+    q = _filter_receipts(q, start=start, end=end, merchants=merchants, category=category)
     return q.group_by(ReceiptItem.item_name).all()
 
 
@@ -354,7 +354,7 @@ ITEM_SORTS = {
 }
 
 
-def _item_query(db: Session, user_id: int, *, query, names, merchants, start, end, currency):
+def _item_query(db: Session, user_id: int, *, query, names, merchants, start, end, currency, category=None):
     q = db.query(ReceiptItem).join(Receipt, ReceiptItem.receipt_id == Receipt.receipt_id).filter(
         Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES)
     )
@@ -362,7 +362,8 @@ def _item_query(db: Session, user_id: int, *, query, names, merchants, start, en
         q = q.filter(ReceiptItem.item_name.ilike(f"%{query.strip()}%"))
     if names is not None:
         q = q.filter(ReceiptItem.item_name.in_(list(names)))
-    return _filter_receipts(q, start=start, end=end, merchants=merchants, currency=currency)
+    return _filter_receipts(q, start=start, end=end, merchants=merchants, currency=currency,
+                            category=category)
 
 
 def list_items(
@@ -376,12 +377,13 @@ def list_items(
     start: Optional[date] = None,
     end: Optional[date] = None,
     currency: Optional[str] = None,
+    category: Optional[str] = None,
     sort: str = "newest",
     limit: int = 50,
 ) -> List[dict]:
     """Purchased line items with their receipt's merchant, date, currency and review state."""
     q = _item_query(db, user_id, query=query, names=names, merchants=merchants, start=start, end=end,
-                    currency=currency)
+                    currency=currency, category=category)
     if merchant:
         q = q.filter(Receipt.merchant_name.ilike(f"%{merchant.strip()}%"))
     rows = q.with_entities(
@@ -402,10 +404,11 @@ def item_summary(
     start: Optional[date] = None,
     end: Optional[date] = None,
     currency: Optional[str] = None,
+    category: Optional[str] = None,
 ) -> List[dict]:
     """Per item name and currency: times bought, total quantity, total spent (sum of line totals)."""
     q = _item_query(db, user_id, query=query, names=names, merchants=merchants, start=start, end=end,
-                    currency=currency).with_entities(
+                    currency=currency, category=category).with_entities(
         ReceiptItem.item_name,
         Receipt.currency,
         func.count(ReceiptItem.item_id).label("times"),

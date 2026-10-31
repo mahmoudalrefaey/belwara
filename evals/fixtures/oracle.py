@@ -83,7 +83,9 @@ class Oracle:
                 continue
             if end and (r.day is None or r.day > end):
                 continue
-            if merchant and r.merchant_key != merchant:
+            # Identity comes from the ground truth, but only where the stored data carries it: a
+            # receipt whose merchant name OCR never read can't be attributed by anyone.
+            if merchant and (r.merchant_key != merchant or not r.stored_merchant):
                 continue
             if category and r.category != category:
                 continue
@@ -148,7 +150,7 @@ class Oracle:
     def merchant_keys(self) -> Dict[str, int]:
         out: Dict[str, int] = defaultdict(int)
         for r in self.receipts:
-            if r.merchant_key and r.status in COUNTED:
+            if r.merchant_key and r.stored_merchant and r.status in COUNTED:
                 out[r.merchant_key] += 1
         return dict(out)
 

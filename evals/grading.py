@@ -168,8 +168,28 @@ def _plain_numbers(reply: str) -> List[Decimal]:
     return [d for d in (_to_decimal(x) for x in _NUMBER.findall(reply.translate(_DIGITS))) if d is not None]
 
 
+_NUMBER_WORDS = {
+    1: ("one", "once", "واحد", "واحده", "مره واحده", "مره"), 2: ("two", "twice", "اتنين", "اثنين", "مرتين"),
+    3: ("three", "تلات", "ثلاث", "تلت", "ثلاثه"), 4: ("four", "اربع", "اربعه"), 5: ("five", "خمس", "خمسه"),
+    6: ("six", "ست", "سته"), 7: ("seven", "سبع", "سبعه"), 8: ("eight", "تمن", "ثماني", "تمانيه", "ثمانيه"),
+    9: ("nine", "تسع", "تسعه"), 10: ("ten", "عشر", "عشره"),
+}
+_ORDINAL = re.compile(r"\b(\d{1,2})(?:st|nd|rd|th)\b", re.I)
+
+
 def text_present(reply: str, needle: str) -> bool:
-    return normalize(needle) in normalize(reply)
+    """Loose containment; a count also matches its word ("4" ~ "أربع"), dates ignore "23rd"."""
+    hay = normalize(_ORDINAL.sub(r"\1", reply))
+    n = normalize(needle)
+    if re.fullmatch(r"[\d.]+", n):  # a number must stand alone: "4" is not in "40"
+        if re.search(rf"(?<![\d.]){re.escape(n)}(?![\d]|\.\d)", hay):
+            return True
+    elif n in hay:
+        return True
+    if n.isdigit() and int(n) in _NUMBER_WORDS:
+        words = set(hay.split())
+        return any(normalize(w) in words or normalize(w) in hay.split(" ") for w in _NUMBER_WORDS[int(n)])
+    return False
 
 
 def language_of(reply: str) -> str:

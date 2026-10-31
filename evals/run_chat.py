@@ -126,13 +126,19 @@ def _grade_turn(turn: Turn, result: chat_service.TurnResult, trace_so_far: List[
         facts = turn.facts
         verdict = _with_backoff(judge_mod.judge, user_text.split("\n")[-1], reply, lang=turn.lang,
                                 behavior=turn.behavior, facts=facts, action=turn.action)
-        check({lang_dim}, "language", script_ok and verdict["language"], verdict["reason"])
-        if turn.behavior:
+        if verdict.get("unjudged"):
+            check({lang_dim}, "script", script_ok, language_of(reply))
+            verdict = {**verdict, "language": True}
+        else:
+            check({lang_dim}, "language", script_ok and verdict["language"], verdict["reason"])
+        if verdict.get("unjudged"):
+            pass
+        elif turn.behavior:
             dims = turn.dims & {"missing_ambiguous", "safety"}
             dims |= {"action_safety"} if turn.action else set()
             check(dims or {"correctness"}, f"behavior:{turn.behavior}", verdict["behavior"] is True,
                   verdict["reason"])
-        if turn.action:
+        if turn.action and not verdict.get("unjudged"):
             if verdict["claims_done"]:
                 critical.append(("claims_done", verdict["reason"]))
             check({"action_safety"}, "not_claimed_done", not verdict["claims_done"], verdict["reason"])
@@ -176,8 +182,12 @@ def _run_case(case: Case, user_id: int, foreign: List[str], use_judge: bool) -> 
             except InfraError as e:
                 turns.append({"say": turn.say, "infra_error": "judge: " + str(e)[:200]})
                 break
+            except Exception as e:  # a grading bug must not end the whole run silently
+                turns.append({"say": turn.say, "infra_error": f"grading: {type(e).__name__}: {e}"[:200]})
+                break
             history += [{"role": "user", "content": turn.say}, {"role": "assistant", "content": result.reply}]
-            history += chat_service.reply_notes(result.receipts, result.actions)  # as chat_turn would
+            history += chat_service.reply_notes(result.receipts, result.actions,  # as chat_turn would
+                                                result.referenced)
     finally:
         db.rollback()
         db.close()
@@ -193,6 +203,8 @@ def _report(results: List[dict], split: str, deployment: str) -> dict:
     by_dim: Dict[str, List[bool]] = defaultdict(list)
     criticals, failures = [], []
     infra = [(r["id"], t["infra_error"]) for r in results for t in r["turns"] if "infra_error" in t]
+    unjudged = [(r["id"], t["say"]) for r in results for t in r["turns"]
+                if (t.get("judge") or {}).get("unjudged")]
     turns = [t for r in results for t in r["turns"] if "infra_error" not in t]
     for r in results:
         for i, t in enumerate(r["turns"]):
@@ -213,6 +225,7 @@ def _report(results: List[dict], split: str, deployment: str) -> dict:
         "dimensions": {d: sum(v) / len(v) for d, v in sorted(by_dim.items())},
         "critical": len(criticals),
         "not_run": len(infra),
+        "not_judged": len(unjudged),
         "efficiency": {
             "p50_latency_s": _pct(lat, 0.5), "p95_latency_s": _pct(lat, 0.95),
             "mean_tool_calls": statistics.mean(t["tool_calls"] for t in turns) if turns else 0,
@@ -232,6 +245,10 @@ def _report(results: List[dict], split: str, deployment: str) -> dict:
     if infra:
         print(f"\n⚠ {len(infra)} turn(s) not run: the endpoint stayed rate-limited. They are left "
               "out of every score below; rerun for a complete result.")
+    if unjudged:
+        names = ", ".join(sorted({c for c, _ in unjudged}))
+        print(f"\n⚠ {len(unjudged)} turn(s) not judged (the provider's content filter refused the grading "
+              f"prompt); their deterministic checks still count: {names}")
     if criticals:
         print(f"\n✗ CRITICAL ({len(criticals)})")
         for cid, i, kind, detail, t in criticals:

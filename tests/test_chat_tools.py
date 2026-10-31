@@ -70,7 +70,7 @@ def test_run_tool_rolls_back_after_a_failed_query(monkeypatch):
     monkeypatch.setattr(chat_tools.receipt_service, "list_items", boom)
     db = MagicMock()
     tools = chat_tools.build_tools(db, user_id=1)
-    args = json.dumps({"query": None, "query_alternatives": None, "merchant": None,
+    args = json.dumps({"query": None, "query_alternatives": None, "merchant": None, "category": None,
                        "merchant_alternatives": None, "start": None, "end": None, "mode": "list",
                        "sort": None, "limit": 10})
     out = json.loads(chat_tools.run_tool(db, tools, "find_items", args))
@@ -147,6 +147,26 @@ def test_same_currency_conversion_needs_no_api():
     tools = chat_tools.build_tools(MagicMock(), user_id=1)
     out = _call(tools, "convert_currency", amount=10, from_currency="egp", to_currency="EGP")
     assert out == {"status": "ok", "amount": "10.00", "currency": "EGP"}
+
+
+def test_receipts_a_result_mentions_are_collected_for_follow_ups():
+    result = json.dumps({"status": "ok", "receipts": [
+        {"receipt_id": 7, "merchant": "Shop", "date": "2026-09-11", "total": "10.00", "currency": "EGP",
+         "status": "ready"},
+        {"receipt_id": 7, "merchant": "Shop"},
+    ], "candidates": [{"receipts": [{"receipt_id": 9, "merchant": None}]}]})
+    assert chat_tools.referenced_receipts(result) == [
+        {"receipt_id": 7, "merchant": "Shop", "date": "2026-09-11", "total": "10.00", "currency": "EGP"},
+        {"receipt_id": 9},
+    ]
+    assert chat_tools.referenced_receipts("not json") == []
+
+
+def test_codes_that_are_not_currencies_are_called_out(monkeypatch):
+    monkeypatch.setattr(chat_tools.receipt_service, "spending_summary",
+                        lambda db, uid, **kw: [_row("EGP"), _row("EGY", "30.00", 1)])
+    out = _call(chat_tools.build_tools(MagicMock(), user_id=1), "spending_summary", **SUMMARY_ARGS)
+    assert any("'EGY' is not a real currency code" in n for n in out["limitations"])
 
 
 # ── fx_service ───────────────────────────────────────────────────────────────
