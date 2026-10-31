@@ -1,9 +1,10 @@
 """Business logic for receipt CRUD, search, and spending aggregates (all scoped to one user)."""
 
 from datetime import date, datetime, time, timedelta, timezone
-from typing import List, Optional, Tuple
+from decimal import ROUND_HALF_UP, Decimal
+from typing import List, Optional, Sequence, Tuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Query, Session, selectinload
 
 from app.config import SEARCH_RESULTS_CAP
@@ -28,20 +29,29 @@ def _filter_receipts(
     start: Optional[date] = None,
     end: Optional[date] = None,
     merchant: Optional[str] = None,
+    merchants: Optional[Sequence[str]] = None,
     category: Optional[str] = None,
+    currency: Optional[str] = None,
     status: Optional[str] = None,
+    statuses: Optional[Sequence[str]] = None,
 ) -> Query:
-    """Shared filters; `end` is inclusive."""
+    """Shared filters; `end` is inclusive. `merchants` matches stored names exactly (already resolved)."""
     if start:
         q = q.filter(Receipt.receipt_date >= _day_start(start))
     if end:
         q = q.filter(Receipt.receipt_date < _day_start(end + timedelta(days=1)))
     if merchant:
         q = q.filter(Receipt.merchant_name.ilike(f"%{merchant.strip()}%"))
+    if merchants is not None:
+        q = q.filter(Receipt.merchant_name.in_(list(merchants)))
     if category:
         q = q.filter(Receipt.category == category)
+    if currency:
+        q = q.filter(Receipt.currency == currency.strip().upper())
     if status:
         q = q.filter(Receipt.status == status)
+    if statuses is not None:
+        q = q.filter(Receipt.status.in_(list(statuses)))
     return q
 
 
@@ -58,6 +68,7 @@ def create_receipt(db: Session, user_id: int, payload: ReceiptCreate) -> Receipt
         category=payload.category,
         raw_text=payload.raw_text,
         items=[ReceiptItem(**item.model_dump()) for item in payload.items],
+        confirmed_at=datetime.now(timezone.utc),  # typed in by the user, so verified
     )
     db.add(receipt)
     db.commit()
@@ -73,8 +84,19 @@ def update_receipt(db: Session, receipt: Receipt, payload: ReceiptUpdate) -> Rec
         receipt.items = [ReceiptItem(**item.model_dump()) for item in payload.items]
     receipt.status = STATUS_READY
     receipt.review_reasons = None
+    receipt.confirmed_at = datetime.now(timezone.utc)
     db.commit()
     return get_receipt_by_id(db, receipt.receipt_id, receipt.user_id)
+
+
+# Orderings the chat can ask for; the REST list keeps "recently_uploaded".
+RECEIPT_SORTS = {
+    "newest": (Receipt.receipt_date.desc().nulls_last(), Receipt.created_at.desc()),
+    "oldest": (Receipt.receipt_date.asc().nulls_last(), Receipt.created_at.asc()),
+    "largest": (Receipt.total_amount.desc().nulls_last(), Receipt.receipt_date.desc()),
+    "smallest": (Receipt.total_amount.asc().nulls_last(), Receipt.receipt_date.desc()),
+    "recently_uploaded": (Receipt.created_at.desc(),),
+}
 
 
 def list_receipts_page(
@@ -86,16 +108,29 @@ def list_receipts_page(
     start: Optional[date] = None,
     end: Optional[date] = None,
     merchant: Optional[str] = None,
+    merchants: Optional[Sequence[str]] = None,
     category: Optional[str] = None,
+    currency: Optional[str] = None,
     status: Optional[str] = None,
+    statuses: Optional[Sequence[str]] = None,
+    text: Optional[str] = None,
+    sort: str = "recently_uploaded",
 ) -> Tuple[List[Receipt], int]:
-    """Paginated receipts for one user; no items loaded."""
+    """Paginated receipts for one user; no items loaded. `text` searches merchant, items and receipt text."""
     base = _filter_receipts(
         db.query(Receipt).filter(Receipt.user_id == user_id),
-        start=start, end=end, merchant=merchant, category=category, status=status,
+        start=start, end=end, merchant=merchant, merchants=merchants, category=category,
+        currency=currency, status=status, statuses=statuses,
     )
+    if text:
+        matching = (
+            select(Receipt.receipt_id)
+            .outerjoin(Receipt.items)
+            .where(Receipt.user_id == user_id, _search_conditions(text.strip(), include_raw=True))
+        )
+        base = base.filter(Receipt.receipt_id.in_(matching))
     total = base.count()
-    rows = base.order_by(Receipt.created_at.desc()).offset(offset).limit(limit).all()
+    rows = base.order_by(*RECEIPT_SORTS[sort]).offset(offset).limit(limit).all()
     return rows, total
 
 
@@ -165,21 +200,44 @@ def delete_all_receipts(db: Session, user_id: int) -> int:
 #  AGGREGATES (used by the chat tools; numbers are computed here, never by the LLM)
 # ═════════════════════════════════════════════════════════════════════════════
 
+CENT = Decimal("0.01")
+
+
+def money(value) -> Optional[Decimal]:
+    """Round to cents (half up), keeping Decimal; None stays None."""
+    if value is None:
+        return None
+    return Decimal(value).quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def _utc(col):
+    """The stored UTC timestamp, independent of the database session's time zone."""
+    return func.timezone("UTC", col)
+
+
 def spending_summary(
     db: Session,
     user_id: int,
     *,
     start: Optional[date] = None,
     end: Optional[date] = None,
-    group_by: Optional[str] = None,  # "merchant" | "month" | "category" | None
+    group_by: Optional[str] = None,  # "merchant" | "month" | "day" | "category" | None
     merchant: Optional[str] = None,
+    merchants: Optional[Sequence[str]] = None,
     category: Optional[str] = None,
     currency: Optional[str] = None,
 ) -> List[dict]:
-    """Totals and counts, always split by currency (amounts in different currencies never mix)."""
+    """
+    Totals per currency (amounts in different currencies never mix), optionally grouped.
+
+    Receipts without a total are not summed; they are counted in `missing_total` so callers can
+    say the figure is incomplete. Each row also reports how much of it rests on receipts flagged
+    for review and how many receipts a person confirmed.
+    """
     group_cols = {
         "merchant": Receipt.merchant_name,
-        "month": func.to_char(Receipt.receipt_date, "YYYY-MM"),
+        "month": func.to_char(_utc(Receipt.receipt_date), "YYYY-MM"),
+        "day": func.to_char(_utc(Receipt.receipt_date), "YYYY-MM-DD"),
         "category": Receipt.category,
     }
     group_col = group_cols.get(group_by or "")
@@ -187,23 +245,87 @@ def spending_summary(
     if group_col is not None:
         cols.insert(0, group_col.label("group"))
 
+    has_total = Receipt.total_amount.isnot(None)
+    flagged = Receipt.status == STATUS_NEEDS_REVIEW
     q = db.query(
         *cols,
         func.sum(Receipt.total_amount).label("total"),
-        func.count(Receipt.receipt_id).label("receipts"),
+        func.count(Receipt.total_amount).label("receipts"),
+        func.count(Receipt.receipt_id).label("all_receipts"),
+        func.sum(case((has_total, Receipt.total_taxes), else_=0)).label("tax"),
+        func.sum(case((has_total, Receipt.other), else_=0)).label("other_charges"),
+        func.sum(case((flagged, 1), else_=0)).label("needs_review"),
+        func.sum(case((flagged & has_total, Receipt.total_amount), else_=0)).label("needs_review_amount"),
+        func.count(Receipt.confirmed_at).label("verified"),
     ).filter(Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES))
-    q = _filter_receipts(q, start=start, end=end, merchant=merchant, category=category)
-    if currency:
-        q = q.filter(Receipt.currency == currency)
-    q = q.group_by(*cols).order_by(func.sum(Receipt.total_amount).desc())
-    return [
-        {
-            **row._asdict(),
-            "total": round(float(row.total or 0), 2),
-            "average": round(float(row.total or 0) / row.receipts, 2) if row.receipts else 0.0,
-        }
-        for row in q.limit(100).all()
-    ]
+    q = _filter_receipts(q, start=start, end=end, merchant=merchant, merchants=merchants,
+                         category=category, currency=currency)
+    q = q.group_by(*cols).order_by(func.sum(Receipt.total_amount).desc().nulls_last())
+    rows = []
+    for row in q.limit(100).all():
+        total = money(row.total or 0)
+        rows.append({
+            **({"group": row.group} if group_col is not None else {}),
+            "currency": row.currency,
+            "total": total,
+            "receipts": row.receipts,
+            "missing_total": row.all_receipts - row.receipts,
+            "average": money(total / row.receipts) if row.receipts else None,
+            "tax": money(row.tax or 0),
+            "other_charges": money(row.other_charges or 0),
+            "needs_review": int(row.needs_review or 0),
+            "needs_review_amount": money(row.needs_review_amount or 0),
+            "verified": row.verified,
+        })
+    return rows
+
+
+def daily_buckets(
+    db: Session,
+    user_id: int,
+    *,
+    group_by: Optional[str] = None,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+    merchants: Optional[Sequence[str]] = None,
+    category: Optional[str] = None,
+    currency: Optional[str] = None,
+) -> List[Tuple[Optional[str], Optional[date], str, Decimal]]:
+    """(group, day, currency, total) per receipt day, so each day can be converted at its own rate."""
+    day = func.date(_utc(Receipt.receipt_date))
+    group = {
+        "merchant": Receipt.merchant_name,
+        "category": Receipt.category,
+        "month": func.to_char(_utc(Receipt.receipt_date), "YYYY-MM"),
+    }.get(group_by or "")
+    cols = [day, Receipt.currency] + ([group] if group is not None else [])
+    q = db.query(*cols, func.sum(Receipt.total_amount)).filter(
+        Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES), Receipt.total_amount.isnot(None)
+    )
+    q = _filter_receipts(q, start=start, end=end, merchants=merchants, category=category, currency=currency)
+    out = []
+    for row in q.group_by(*cols).all():
+        d, cur, *rest = row
+        out.append((rest[0] if group is not None else None, d, cur, Decimal(rest[-1])))
+    return out
+
+
+ITEM_SORTS = {
+    "newest": (Receipt.receipt_date.desc().nulls_last(),),
+    "highest_price": (ReceiptItem.unit_price.desc(), Receipt.receipt_date.desc()),
+    "highest_total": (ReceiptItem.line_total.desc(), Receipt.receipt_date.desc()),
+}
+
+
+def _item_query(db: Session, user_id: int, *, query, names, merchants, start, end, currency):
+    q = db.query(ReceiptItem).join(Receipt, ReceiptItem.receipt_id == Receipt.receipt_id).filter(
+        Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES)
+    )
+    if query:
+        q = q.filter(ReceiptItem.item_name.ilike(f"%{query.strip()}%"))
+    if names is not None:
+        q = q.filter(ReceiptItem.item_name.in_(list(names)))
+    return _filter_receipts(q, start=start, end=end, merchants=merchants, currency=currency)
 
 
 def list_items(
@@ -211,30 +333,100 @@ def list_items(
     user_id: int,
     *,
     query: Optional[str] = None,
+    names: Optional[Sequence[str]] = None,
     merchant: Optional[str] = None,
+    merchants: Optional[Sequence[str]] = None,
     start: Optional[date] = None,
     end: Optional[date] = None,
+    currency: Optional[str] = None,
+    sort: str = "newest",
     limit: int = 50,
 ) -> List[dict]:
-    q = (
-        db.query(
-            ReceiptItem.item_name,
-            ReceiptItem.quantity,
-            ReceiptItem.unit_price,
-            ReceiptItem.line_total,
-            Receipt.merchant_name,
-            Receipt.receipt_date,
-            Receipt.currency,
-            Receipt.receipt_id,
-        )
-        .join(Receipt, ReceiptItem.receipt_id == Receipt.receipt_id)
-        .filter(Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES))
-    )
-    if query:
-        q = q.filter(ReceiptItem.item_name.ilike(f"%{query.strip()}%"))
-    q = _filter_receipts(q, start=start, end=end, merchant=merchant)
-    rows = q.order_by(Receipt.receipt_date.desc()).limit(limit).all()
+    """Purchased line items with their receipt's merchant, date, currency and review state."""
+    q = _item_query(db, user_id, query=query, names=names, merchants=merchants, start=start, end=end,
+                    currency=currency)
+    if merchant:
+        q = q.filter(Receipt.merchant_name.ilike(f"%{merchant.strip()}%"))
+    rows = q.with_entities(
+        ReceiptItem.item_name, ReceiptItem.quantity, ReceiptItem.unit_price, ReceiptItem.line_total,
+        Receipt.merchant_name, Receipt.receipt_date, Receipt.currency, Receipt.receipt_id,
+        Receipt.status, Receipt.confirmed_at,
+    ).order_by(*ITEM_SORTS[sort]).limit(limit).all()
     return [row._asdict() for row in rows]
+
+
+def item_summary(
+    db: Session,
+    user_id: int,
+    *,
+    query: Optional[str] = None,
+    names: Optional[Sequence[str]] = None,
+    merchants: Optional[Sequence[str]] = None,
+    start: Optional[date] = None,
+    end: Optional[date] = None,
+    currency: Optional[str] = None,
+) -> List[dict]:
+    """Per item name and currency: times bought, total quantity, total spent (sum of line totals)."""
+    q = _item_query(db, user_id, query=query, names=names, merchants=merchants, start=start, end=end,
+                    currency=currency).with_entities(
+        ReceiptItem.item_name,
+        Receipt.currency,
+        func.count(ReceiptItem.item_id).label("times"),
+        func.sum(ReceiptItem.quantity).label("quantity"),
+        func.sum(ReceiptItem.line_total).label("spent"),
+        func.min(ReceiptItem.unit_price).label("lowest_unit_price"),
+        func.max(ReceiptItem.unit_price).label("highest_unit_price"),
+        func.max(Receipt.receipt_date).label("last_bought"),
+    ).group_by(ReceiptItem.item_name, Receipt.currency).order_by(func.sum(ReceiptItem.line_total).desc())
+    return [
+        {
+            "item": r.item_name,
+            "currency": r.currency,
+            "times": r.times,
+            "quantity": Decimal(r.quantity),
+            "spent": money(r.spent),
+            "lowest_unit_price": money(r.lowest_unit_price),
+            "highest_unit_price": money(r.highest_unit_price),
+            "last_bought": r.last_bought,
+        }
+        for r in q.limit(50).all()
+    ]
+
+
+def account_overview(db: Session, user_id: int) -> dict:
+    """What the user has: receipts by status, date span, currencies, and what needs attention."""
+    by_status = dict(
+        db.query(Receipt.status, func.count())
+        .filter(Receipt.user_id == user_id)
+        .group_by(Receipt.status)
+        .all()
+    )
+    counted = db.query(Receipt).filter(Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES))
+    first, latest = counted.with_entities(
+        func.min(Receipt.receipt_date), func.max(Receipt.receipt_date)
+    ).one()
+    last_upload = db.query(func.max(Receipt.created_at)).filter(Receipt.user_id == user_id).scalar()
+    currencies = (
+        counted.with_entities(Receipt.currency, func.count())
+        .group_by(Receipt.currency)
+        .order_by(func.count().desc())
+        .all()
+    )
+    flagged = (
+        db.query(Receipt)
+        .filter(Receipt.user_id == user_id, Receipt.status == STATUS_NEEDS_REVIEW)
+        .order_by(Receipt.receipt_date.desc().nulls_last())
+        .limit(10)
+        .all()
+    )
+    return {
+        "receipts_by_status": by_status,
+        "first_receipt_date": first,
+        "latest_receipt_date": latest,
+        "last_upload_at": last_upload,
+        "currencies": [{"currency": c, "receipts": n} for c, n in currencies],
+        "needs_review": flagged,
+    }
 
 
 def dashboard(db: Session, user_id: int, currency: Optional[str] = None) -> dict:
@@ -248,7 +440,7 @@ def dashboard(db: Session, user_id: int, currency: Optional[str] = None) -> dict
         if not currency:
             return []
         return [
-            {"label": r["group"] or "Unknown", "total": r["total"]}
+            {"label": r["group"] or "Unknown", "total": float(r["total"])}
             for r in spending_summary(db, user_id, group_by=group_by, currency=currency, **kw)
         ]
 
@@ -262,14 +454,14 @@ def dashboard(db: Session, user_id: int, currency: Optional[str] = None) -> dict
     )
     return {
         "currencies": [
-            {"currency": r["currency"], "total": r["total"], "receipts": r["receipts"]}
+            {"currency": r["currency"], "total": float(r["total"]), "receipts": r["receipts"]}
             for r in per_currency
         ],
         "currency": currency,
-        "total": selected["total"] if selected else 0.0,
+        "total": float(selected["total"]) if selected else 0.0,
         "receipts": selected["receipts"] if selected else 0,
-        "average": selected["average"] if selected else 0.0,
-        "this_month": this_month[0]["total"] if this_month and currency else 0.0,
+        "average": float(selected["average"] or 0) if selected else 0.0,
+        "this_month": float(this_month[0]["total"]) if this_month and currency else 0.0,
         "by_month": sorted(by_month, key=lambda r: r["label"]),
         "by_merchant": grouped("merchant")[:5],
         "by_category": grouped("category"),

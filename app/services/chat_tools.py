@@ -1,25 +1,50 @@
 """
 Chat tools: typed functions the model may call.
 
-Every tool is bound to one user in code (build_tools); the model never sees or sets user_id,
-and every number it reports is computed here, not by the model.
+Every tool is bound to one user in code (build_tools); the model never sees or sets user_id, and
+every number it reports is computed here, not by the model.
+
+Every result is an envelope the model can act on:
+    status       ok | no_results | ambiguous | error
+    …data…       rows, receipts, items (amounts are exact decimals as strings, dates YYYY-MM-DD)
+    searched     what was looked for, when nothing matched
+    limitations  what the figures leave out or can't vouch for
+    error        {code, retryable} — never shown to the user as is
 """
 
 import json
 import logging
-import time
-from datetime import date
-from typing import Callable, Dict, Optional
+from datetime import date, datetime, timezone
+from decimal import Decimal
+from typing import Callable, Dict, List, Optional
 
-import requests
 from sqlalchemy.orm import Session
 
-from app.config import CURRENCYFREAKS_API_KEY
-from app.services import receipt_service
+from app.models.receipt import COUNTED_STATUSES, Receipt
+from app.services import fx_service, receipt_service
+from app.services.receipt_service import money
 
 log = logging.getLogger(__name__)
 
 _RESULT_ROWS = 50
+_CATEGORIES = ["groceries", "dining", "transport", "shopping", "bills", "health", "entertainment", "other"]
+
+# Plain wording for review reasons (same meaning as the app's labels in frontend/messages).
+REVIEW_REASONS = {
+    "missing_merchant_name": "the merchant name couldn't be read",
+    "missing_receipt_date": "the date couldn't be read",
+    "missing_total_amount": "the total couldn't be read",
+    "missing_currency": "the currency couldn't be told",
+    "invalid_total": "the total looks wrong",
+    "date_in_future": "the date is in the future",
+    "date_too_old": "the date is more than 2 years ago",
+    "items_sum_mismatch": "the items don't add up to the total",
+    "line_price_mismatch": "an item's price × quantity doesn't match its line total",
+    "invalid_currency": "the currency code isn't a real currency",
+    "possible_duplicate": "it looks like a receipt that was already uploaded",
+    "not_a_receipt": "it doesn't look like a receipt",
+    "processing_error": "the file couldn't be read",
+}
 
 
 def _nullable(type_: str, description: str, **extra) -> dict:
@@ -30,11 +55,9 @@ _DATE_RANGE = {
     "start": _nullable("string", "Inclusive start date YYYY-MM-DD, or null for no lower bound."),
     "end": _nullable("string", "Inclusive end date YYYY-MM-DD, or null for no upper bound."),
 }
-_CATEGORY = _nullable(
-    "string",
-    "Receipt category filter, or null.",
-    enum=["groceries", "dining", "transport", "shopping", "bills", "health", "entertainment", "other", None],
-)
+_MERCHANT = _nullable("string", "Merchant name as the user wrote it, or null.")
+_CATEGORY = _nullable("string", "Receipt category, or null.", enum=[*_CATEGORIES, None])
+_CURRENCY = _nullable("string", "Only receipts in this ISO currency code, or null for all.")
 
 
 def _function(name: str, description: str, properties: dict) -> dict:
@@ -57,41 +80,71 @@ def _function(name: str, description: str, properties: dict) -> dict:
 TOOL_SPECS = [
     _function(
         "spending_summary",
-        "Total spent and receipt count, split by currency, optionally grouped. "
-        "Use for totals, averages, top merchants/categories, and month-by-month trends.",
+        "Totals per currency: amount, receipt count, average per receipt, tax, other charges, and how "
+        "much rests on receipts that need review. Optionally grouped, converted to one currency, or "
+        "compared with another period. Use for any total, average, breakdown, trend or comparison.",
         {
             **_DATE_RANGE,
-            "group_by": _nullable(
-                "string", "Group rows by this, or null for one total per currency.",
-                enum=["merchant", "month", "category", None],
+            "group_by": _nullable("string", "Group rows by this, or null for one total per currency.",
+                                  enum=["merchant", "category", "month", "day", None]),
+            "merchant": _MERCHANT,
+            "category": _CATEGORY,
+            "currency": _CURRENCY,
+            "convert_to": _nullable("string", "Also give totals converted into this ISO currency, or null."),
+            "compare_start": _nullable("string", "Start of a second period to compare with, or null."),
+            "compare_end": _nullable("string", "End of the second period to compare with, or null."),
+        },
+    ),
+    _function(
+        "find_receipts",
+        "Individual receipts with merchant, date, total, tax, currency, category and review state. "
+        "Sort to find the newest, oldest, largest or smallest; search receipt text with `text`.",
+        {
+            **_DATE_RANGE,
+            "merchant": _MERCHANT,
+            "category": _CATEGORY,
+            "currency": _CURRENCY,
+            "status": _nullable(
+                "string",
+                "counted (default: ready + needs_review), needs_review, failed (unreadable uploads), "
+                "processing, or all.",
+                enum=["counted", "needs_review", "failed", "processing", "all", None],
             ),
-            "merchant": _nullable("string", "Merchant name (partial match), or null."),
-            "category": _CATEGORY,
-        },
-    ),
-    _function(
-        "list_receipts",
-        "Individual receipts (newest first) with merchant, date, total, currency and category.",
-        {
-            **_DATE_RANGE,
-            "merchant": _nullable("string", "Merchant name (partial match), or null."),
-            "category": _CATEGORY,
+            "text": _nullable("string", "Words to find anywhere on a receipt (items, printed text)."),
+            "sort": _nullable("string", "Order of results (default newest).",
+                              enum=["newest", "oldest", "largest", "smallest", "recently_uploaded", None]),
             "limit": {"type": "integer", "description": "Max rows, 1-50."},
         },
     ),
     _function(
-        "list_items",
-        "Purchased line items (newest first) with quantity, prices, merchant and date.",
+        "get_receipt",
+        "One receipt in full: line items with quantities and prices, items total, tax, other charges, "
+        "total, review reasons, missing fields, and whether the items add up.",
+        {"receipt_id": {"type": "integer"}},
+    ),
+    _function(
+        "find_items",
+        "Purchased line items. mode=list gives each purchase; mode=summary groups by item with times "
+        "bought, total quantity and total spent.",
         {
-            "query": _nullable("string", "Item name (partial match), or null for all items."),
-            "merchant": _nullable("string", "Merchant name (partial match), or null."),
+            "query": _nullable("string", "Item name as the user wrote it, or null for all items."),
+            "merchant": _MERCHANT,
             **_DATE_RANGE,
+            "mode": {"type": "string", "enum": ["list", "summary"]},
+            "sort": _nullable("string", "For mode=list (default newest).",
+                              enum=["newest", "highest_price", "highest_total", None]),
             "limit": {"type": "integer", "description": "Max rows, 1-50."},
         },
+    ),
+    _function(
+        "account_overview",
+        "What the user has: receipts by status (including failed and still processing), first and "
+        "latest receipt dates, currencies, and the receipts that need review with their reasons.",
+        {},
     ),
     _function(
         "convert_currency",
-        "Convert an amount between currencies at the latest exchange rate.",
+        "Convert one amount between currencies at the latest exchange rate.",
         {
             "amount": {"type": "number"},
             "from_currency": {"type": "string", "description": "ISO code, e.g. EGP."},
@@ -102,54 +155,31 @@ TOOL_SPECS = [
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  CURRENCY (CurrencyFreaks, USD-based; rates cached for an hour)
+#  RESULT SHAPES
 # ═════════════════════════════════════════════════════════════════════════════
 
-_RATES_URL = "https://api.currencyfreaks.com/v2.0/rates/latest"
-_RATES_TTL_SECONDS = 3600
-_rates_cache: dict = {}
+def _ok(limitations: Optional[List[str]] = None, **data) -> dict:
+    out = {"status": "ok", **data}
+    if limitations:
+        out["limitations"] = limitations
+    return out
 
 
-def _usd_rates() -> dict:
-    if _rates_cache and time.time() - _rates_cache["fetched_at"] < _RATES_TTL_SECONDS:
-        return _rates_cache
-    r = requests.get(_RATES_URL, params={"apikey": CURRENCYFREAKS_API_KEY}, timeout=10)
-    r.raise_for_status()
-    data = r.json()
-    _rates_cache.update(
-        fetched_at=time.time(),
-        date=data.get("date"),
-        rates={k: float(v) for k, v in (data.get("rates") or {}).items()},
-    )
-    return _rates_cache
+def _no_results(searched: dict, **extra) -> dict:
+    return {"status": "no_results", "searched": {k: v for k, v in searched.items() if v is not None}, **extra}
 
 
-def convert_currency(amount: float, from_currency: str, to_currency: str) -> dict:
-    src, dst = from_currency.strip().upper(), to_currency.strip().upper()
-    if src == dst:
-        return {"amount": amount, "currency": dst}
-    if not CURRENCYFREAKS_API_KEY:
-        return {"error": "Currency conversion is not available."}
-    try:
-        cache = _usd_rates()
-    except requests.RequestException:
-        log.exception("Currency rates fetch failed")
-        return {"error": "Exchange rates are temporarily unavailable."}
-    rate_src, rate_dst = cache["rates"].get(src), cache["rates"].get(dst)
-    if not rate_src or not rate_dst:
-        return {"error": f"Unknown currency code {src if not rate_src else dst}."}
-    return {
-        "amount": amount,
-        "from_currency": src,
-        "converted": round(amount * rate_dst / rate_src, 2),
-        "to_currency": dst,
-        "rate_date": cache["date"],
-    }
+def _error(code: str, detail: str = "", retryable: bool = False) -> dict:
+    return {"status": "error", "error": {"code": code, "detail": detail, "retryable": retryable}}
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  BINDING + DISPATCH
-# ═════════════════════════════════════════════════════════════════════════════
+def _day(value) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).date().isoformat()
+    return value.isoformat()
+
 
 def _date(value: Optional[str]) -> Optional[date]:
     return date.fromisoformat(value) if value else None
@@ -159,61 +189,269 @@ def _limit(value: int) -> int:
     return max(1, min(int(value or _RESULT_ROWS), _RESULT_ROWS))
 
 
+def _reasons(codes) -> List[str]:
+    return [REVIEW_REASONS.get(c, c) for c in (codes or [])]
+
+
+def _missing(r: Receipt) -> List[str]:
+    fields = {"merchant": r.merchant_name, "date": r.receipt_date, "total": r.total_amount,
+              "currency": r.currency}
+    return [k for k, v in fields.items() if v is None]
+
+
+def _receipt_row(r: Receipt) -> dict:
+    row = {
+        "receipt_id": r.receipt_id,
+        "merchant": r.merchant_name,
+        "date": _day(r.receipt_date),
+        "total": money(r.total_amount),
+        "currency": r.currency,
+        "tax": money(r.total_taxes),
+        "category": r.category,
+        "status": r.status,
+        "verification": r.verification,
+    }
+    if r.review_reasons:
+        row["review_reasons"] = _reasons(r.review_reasons)
+    if _missing(r) and r.status in COUNTED_STATUSES:
+        row["missing"] = _missing(r)
+    return row
+
+
+def _verification(status: str, confirmed_at) -> str:
+    if status == "needs_review":
+        return "needs_review"
+    return "verified" if confirmed_at else "extracted"
+
+
+def _quality_notes(rows: List[dict]) -> List[str]:
+    notes = []
+    missing = sum(r["missing_total"] for r in rows)
+    if missing:
+        notes.append(f"{missing} receipt(s) in range have no total, so they are not included in the figures.")
+    for r in rows:
+        if r["needs_review"]:
+            notes.append(f"{r['needs_review']} receipt(s) totalling {r['needs_review_amount']} "
+                         f"{r['currency']} are included but still need the user's review.")
+    if any(r["currency"] is None for r in rows):
+        notes.append("Some receipts have no currency; they are listed with currency null.")
+    return notes
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  TOOLS
+# ═════════════════════════════════════════════════════════════════════════════
+
 def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
     """Tool name → callable, each closed over this request's db session and user."""
 
-    def spending_summary(start, end, group_by, merchant, category):
-        return receipt_service.spending_summary(
-            db, user_id, start=_date(start), end=_date(end),
-            group_by=group_by, merchant=merchant, category=category,
-        )
-
-    def list_receipts(start, end, merchant, category, limit):
-        rows, total = receipt_service.list_receipts_page(
-            db, user_id, limit=_limit(limit), offset=0,
-            start=_date(start), end=_date(end), merchant=merchant, category=category,
-        )
-        return {
-            "total_matching": total,
-            "receipts": [
-                {
-                    "receipt_id": r.receipt_id,
-                    "merchant": r.merchant_name,
-                    "date": r.receipt_date,
-                    "total": r.total_amount,
-                    "currency": r.currency,
-                    "category": r.category,
-                    "status": r.status,
-                }
-                for r in rows
-            ],
+    def _converted(group_by, convert_to, **filters) -> dict:
+        buckets = receipt_service.daily_buckets(db, user_id, group_by=group_by, **filters)
+        groups: Dict[Optional[str], list] = {}
+        for group, day, cur, amount in buckets:
+            groups.setdefault(group, []).append((day, cur, amount))
+        rows, bases, dates, left_out = [], set(), set(), {}
+        for group, items in groups.items():
+            c = fx_service.convert(db, items, convert_to)
+            rows.append({**({"group": group} if group_by else {}), "total": c.total})
+            bases.add(c.rate_basis)
+            dates.update(c.rate_dates)
+            for cur, amount in c.not_converted.items():
+                left_out[cur] = money(left_out.get(cur, Decimal(0)) + amount)
+        rows.sort(key=lambda r: r["total"], reverse=True)
+        basis = bases.pop() if len(bases) == 1 else "mixed"
+        out = {
+            "to_currency": convert_to.upper(),
+            "rows": rows,
+            "rate_basis": basis,
+            "approximate": basis != "historical",
+            "rate_dates": [min(dates), max(dates)] if dates else [],
         }
+        if basis == "current":
+            out["note"] = "Converted at today's rate, not the rate on each receipt's date."
+        if left_out:
+            out["not_converted"] = left_out
+        return out
 
-    def list_items(query, merchant, start, end, limit):
-        return receipt_service.list_items(
-            db, user_id, query=query, merchant=merchant,
-            start=_date(start), end=_date(end), limit=_limit(limit),
+    def spending_summary(start, end, group_by, merchant, category, currency, convert_to,
+                         compare_start, compare_end):
+        s, e = _date(start), _date(end)
+        if s and e and s > e:
+            return _error("invalid_arguments", "start is after end")
+        filters = dict(merchant=merchant, category=category, currency=currency)
+        rows = receipt_service.spending_summary(db, user_id, start=s, end=e, group_by=group_by, **filters)
+        searched = {"start": start, "end": end, **filters, "group_by": group_by}
+        if not rows:
+            return _no_results(searched)
+        out = {"rows": rows}
+        if s and e:
+            days = (min(e, date.today()) - s).days + 1
+            if days > 0:
+                out["period"] = {"start": start, "end": end, "days_counted": days}
+                if not group_by:
+                    for r in rows:
+                        r["daily_average"] = money(r["total"] / days)
+        if convert_to:
+            if group_by in (None, "merchant", "category", "month"):
+                merchants = None
+                if merchant:
+                    merchants = [r["group"] for r in receipt_service.spending_summary(
+                        db, user_id, start=s, end=e, group_by="merchant", **filters)]
+                out["converted"] = _converted(group_by, convert_to, start=s, end=e, merchants=merchants,
+                                              category=category, currency=currency)
+        if compare_start or compare_end:
+            cs, ce = _date(compare_start), _date(compare_end)
+            other = receipt_service.spending_summary(db, user_id, start=cs, end=ce, group_by=group_by,
+                                                     **filters)
+            key = lambda r: (r.get("group"), r["currency"])  # noqa: E731
+            mine, theirs = {key(r): r for r in rows}, {key(r): r for r in other}
+            changes = []
+            for k in sorted(set(mine) | set(theirs), key=lambda k: (str(k[0]), str(k[1]))):
+                a = mine[k]["total"] if k in mine else Decimal("0.00")
+                b = theirs[k]["total"] if k in theirs else Decimal("0.00")
+                changes.append({
+                    **({"group": k[0]} if group_by else {}),
+                    "currency": k[1],
+                    "this_period": a,
+                    "compare_period": b,
+                    "difference": money(a - b),
+                    "percent_change": money((a - b) / b * 100) if b else None,
+                })
+            out["comparison"] = {"compare_period": {"start": compare_start, "end": compare_end},
+                                 "rows": other, "changes": changes}
+        return _ok(_quality_notes(rows), **out)
+
+    def find_receipts(start, end, merchant, category, currency, status, text, sort, limit):
+        statuses = {None: COUNTED_STATUSES, "counted": COUNTED_STATUSES, "all": None}.get(status, [status])
+        sort = sort or "newest"
+        kwargs = dict(start=_date(start), end=_date(end), merchant=merchant, category=category,
+                      currency=currency, statuses=statuses, text=text, sort=sort)
+        searched = {"start": start, "end": end, "merchant": merchant, "category": category,
+                    "currency": currency, "status": status, "text": text}
+        if sort in ("largest", "smallest") and not currency:
+            # Amounts in different currencies can't be ranked against each other.
+            by_currency = {}
+            total = 0
+            for cur in [c["currency"] for c in receipt_service.account_overview(db, user_id)["currencies"]]:
+                if cur is None:
+                    continue
+                rows, n = receipt_service.list_receipts_page(
+                    db, user_id, limit=min(_limit(limit), 5), offset=0, **{**kwargs, "currency": cur})
+                if rows:
+                    by_currency[cur] = [_receipt_row(r) for r in rows]
+                    total += n
+            if not by_currency:
+                return _no_results(searched)
+            return _ok(
+                ["Ranked within each currency; amounts in different currencies are not comparable."]
+                if len(by_currency) > 1 else None,
+                sort=sort, total_matching=total, by_currency=by_currency,
+            )
+        rows, total = receipt_service.list_receipts_page(db, user_id, limit=_limit(limit), offset=0, **kwargs)
+        if not rows:
+            return _no_results(searched)
+        return _ok(sort=sort, total_matching=total, receipts=[_receipt_row(r) for r in rows])
+
+    def get_receipt(receipt_id):
+        r = receipt_service.get_receipt_by_id(db, int(receipt_id), user_id)
+        if r is None:
+            return _no_results({"receipt_id": receipt_id})
+        items_total = money(sum((i.line_total for i in r.items), Decimal(0)))
+        row = _receipt_row(r)
+        row.update(
+            other_charges=money(r.other),
+            items=[{"name": i.item_name, "quantity": i.quantity, "unit_price": money(i.unit_price),
+                    "line_total": money(i.line_total)} for i in r.items],
+            items_total=items_total,
+            link=f"/receipts?open={r.receipt_id}",
         )
+        notes = []
+        if r.items and r.total_amount is not None:
+            expected = [money(r.total_amount), money(r.total_amount - r.total_taxes - r.other)]
+            row["items_match_total"] = any(abs(items_total - x) <= max(Decimal("0.05"), x * Decimal("0.02"))
+                                           for x in expected)
+            if not row["items_match_total"]:
+                notes.append("The line items don't add up to the receipt total; one of them may be misread.")
+        if r.verification != "verified":
+            notes.append("Values were read from the photo automatically"
+                         + (" and are flagged for review." if r.status == "needs_review" else "."))
+        return _ok(notes, receipt=row)
+
+    def find_items(query, merchant, start, end, mode, sort, limit):
+        kwargs = dict(query=query, start=_date(start), end=_date(end))
+        searched = {"query": query, "merchant": merchant, "start": start, "end": end}
+        if mode == "summary":
+            merchants = None
+            if merchant:
+                merchants = [r["group"] for r in receipt_service.spending_summary(
+                    db, user_id, group_by="merchant", merchant=merchant)]
+            rows = receipt_service.item_summary(db, user_id, merchants=merchants, **kwargs)
+            if not rows:
+                return _no_results(searched)
+            return _ok(items=[{**r, "last_bought": _day(r["last_bought"])} for r in rows])
+        rows = receipt_service.list_items(db, user_id, merchant=merchant, sort=sort or "newest",
+                                          limit=_limit(limit), **kwargs)
+        if not rows:
+            return _no_results(searched)
+        return _ok(items=[{
+            "item": r["item_name"], "quantity": r["quantity"], "unit_price": money(r["unit_price"]),
+            "line_total": money(r["line_total"]), "currency": r["currency"], "merchant": r["merchant_name"],
+            "date": _day(r["receipt_date"]), "receipt_id": r["receipt_id"],
+            "verification": _verification(r["status"], r["confirmed_at"]),
+        } for r in rows])
+
+    def account_overview():
+        o = receipt_service.account_overview(db, user_id)
+        if not o["receipts_by_status"]:
+            return _no_results({"receipts": "any"})
+        return _ok(
+            receipts_by_status=o["receipts_by_status"],
+            first_receipt_date=_day(o["first_receipt_date"]),
+            latest_receipt_date=_day(o["latest_receipt_date"]),
+            last_upload_date=_day(o["last_upload_at"]),
+            currencies=o["currencies"],
+            needs_review=[_receipt_row(r) for r in o["needs_review"]],
+        )
+
+    def convert_currency(amount, from_currency, to_currency):
+        src, dst = from_currency.strip().upper(), to_currency.strip().upper()
+        value = Decimal(str(amount))
+        if src == dst:
+            return _ok(amount=money(value), currency=dst)
+        try:
+            c = fx_service.convert(db, [(None, src, value)], dst)
+        except ValueError as e:
+            return _error("unknown_currency", str(e))
+        if c.not_converted:
+            return _error("unknown_currency", f"No exchange rate for {src}.")
+        return _ok(amount=money(value), from_currency=src, converted=c.total, to_currency=dst,
+                   rate_basis=c.rate_basis, approximate=True,
+                   rate_date=c.rate_dates[0] if c.rate_dates else None)
 
     return {
         "spending_summary": spending_summary,
-        "list_receipts": list_receipts,
-        "list_items": list_items,
+        "find_receipts": find_receipts,
+        "get_receipt": get_receipt,
+        "find_items": find_items,
+        "account_overview": account_overview,
         "convert_currency": convert_currency,
     }
 
 
 def run_tool(db: Session, tools: Dict[str, Callable[..., object]], name: str, arguments: str) -> str:
-    """Execute one tool call and return its JSON result (errors are returned, not raised)."""
+    """Execute one tool call and return its JSON envelope (errors are returned, not raised)."""
     fn = tools.get(name)
     if fn is None:
-        return json.dumps({"error": f"Unknown tool {name}."})
-    try:
-        result = fn(**json.loads(arguments or "{}"))
-    except ValueError as e:  # bad date strings, bad JSON
-        result = {"error": f"Invalid arguments: {e}"}
-    except Exception:
-        log.exception("Tool %s failed", name)
-        db.rollback()  # keep the session usable for the next call
-        result = {"error": "The data could not be loaded."}
+        result = _error("unknown_tool", name)
+    else:
+        try:
+            result = fn(**json.loads(arguments or "{}"))
+        except (ValueError, TypeError) as e:  # bad date strings, bad JSON, wrong argument names
+            result = _error("invalid_arguments", str(e))
+        except fx_service.RatesUnavailable:
+            result = _error("rates_unavailable", "Exchange rates are unavailable.", retryable=True)
+        except Exception:
+            log.exception("Tool %s failed", name)
+            db.rollback()  # keep the session usable for the next call
+            result = _error("internal", "The data could not be loaded.", retryable=True)
     return json.dumps(result, default=str, ensure_ascii=False)

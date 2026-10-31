@@ -34,6 +34,7 @@ from app.services import (  # noqa: E402
     storage_service,
     upload_service,
 )
+from app.schemas.receipt import ReceiptUpdate  # noqa: E402
 from app.services.extract_service import ExtractedItem, ExtractedReceipt  # noqa: E402
 
 TODAY = date.today()
@@ -65,12 +66,13 @@ def _user(db, email):
 
 
 def _receipt(db, user_id, merchant, amount, currency="EGP", days_ago=1, category="groceries",
-             status="ready", items=()):
+             status="ready", items=(), tax="0"):
     r = Receipt(
         user_id=user_id, status=status, merchant_name=merchant,
         receipt_date=datetime.combine(TODAY - timedelta(days=days_ago), datetime.min.time(),
                                       tzinfo=timezone.utc),
-        total_amount=Decimal(str(amount)), currency=currency, category=category,
+        total_amount=Decimal(str(amount)) if amount is not None else None, currency=currency,
+        category=category, total_taxes=Decimal(tax),
         items=[ReceiptItem(item_name=n, quantity=1, unit_price=p, line_total=p) for n, p in items],
     )
     db.add(r)
@@ -125,10 +127,86 @@ def test_spending_summary_is_scoped_and_never_mixes_currencies():
     assert rows["USD"]["total"] == 20.0
 
     by_merchant = receipt_service.spending_summary(db, a, group_by="merchant", currency="EGP")
-    assert by_merchant == [
-        {"group": "Carrefour", "currency": "EGP", "total": 150.0, "receipts": 2, "average": 75.0}
+    assert [(r["group"], r["total"], r["receipts"], r["average"]) for r in by_merchant] == [
+        ("Carrefour", Decimal("150.00"), 2, Decimal("75.00"))
     ]
     assert receipt_service.spending_summary(db, b)[0]["total"] == 7000.0
+    db.close()
+
+
+def test_summary_reports_what_it_leaves_out_and_what_needs_review():
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    _receipt(db, a, "Shop", 100)
+    _receipt(db, a, "Shop", 30, status="needs_review")
+    _receipt(db, a, "Shop", None, status="needs_review")  # total unreadable
+    _receipt(db, a, "Cafe", 50, tax="7.00")
+    [row] = receipt_service.spending_summary(db, a)
+    assert row["total"] == Decimal("180.00") and row["receipts"] == 3 and row["missing_total"] == 1
+    assert row["average"] == Decimal("60.00")  # 180 / 3 receipts that have a total, not / 4
+    assert row["needs_review"] == 2 and row["needs_review_amount"] == Decimal("30.00")
+    assert row["tax"] == Decimal("7.00")
+    db.close()
+
+
+def test_receipts_sort_by_date_and_amount_not_upload_order():
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    old_big = _receipt(db, a, "Old", 900, days_ago=40)
+    _receipt(db, a, "Recent", 10, days_ago=2)
+    newest = _receipt(db, a, "Newest", 20, days_ago=1)
+    late_upload = _receipt(db, a, "Uploaded last", 5, days_ago=20)
+    failed = _receipt(db, a, None, None, status="failed")
+
+    def first(**kw):
+        rows, _ = receipt_service.list_receipts_page(db, a, limit=1, offset=0, **kw)
+        return rows[0].receipt_id
+
+    counted = ("ready", "needs_review")
+    assert first(sort="recently_uploaded") == failed
+    assert first(sort="recently_uploaded", statuses=counted) == late_upload
+    assert first(sort="newest", statuses=counted) == newest
+    assert first(sort="largest", statuses=counted) == old_big
+    assert first(sort="oldest", statuses=counted) == old_big
+    assert first(statuses=["failed"]) == failed
+    db.close()
+
+
+def test_confirming_a_receipt_marks_it_verified():
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    rid = _receipt(db, a, "Shop", 40, status="needs_review")
+    r = receipt_service.get_receipt_by_id(db, rid, a)
+    assert r.verification == "needs_review"
+    r = receipt_service.update_receipt(db, r, ReceiptUpdate())
+    assert r.status == "ready" and r.verification == "verified"
+    [row] = receipt_service.spending_summary(db, a)
+    assert row["verified"] == 1
+    db.close()
+
+
+def test_overview_items_and_conversion_buckets():
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    _receipt(db, a, "Shop", 100, items=[("Milk", 40), ("Bread", 60)], days_ago=3)
+    _receipt(db, a, "Shop", 50, items=[("Milk", 50)], days_ago=1)
+    _receipt(db, a, "Paris", 10, currency="EUR", category="shopping", days_ago=1)
+    _receipt(db, a, None, None, status="failed")
+    _receipt(db, a, None, 9, status="needs_review")
+
+    o = receipt_service.account_overview(db, a)
+    assert o["receipts_by_status"] == {"ready": 3, "failed": 1, "needs_review": 1}
+    assert o["latest_receipt_date"].date() == TODAY - timedelta(days=1)
+    assert [r.merchant_name for r in o["needs_review"]] == [None]
+
+    [milk] = receipt_service.item_summary(db, a, query="milk")
+    assert milk["times"] == 2 and milk["spent"] == Decimal("90.00") and milk["quantity"] == 2
+    priciest = receipt_service.list_items(db, a, sort="highest_price", limit=1)
+    assert priciest[0]["item_name"] == "Bread"
+
+    buckets = receipt_service.daily_buckets(db, a, group_by="category")
+    assert {(g, c) for g, _, c, _ in buckets} == {("groceries", "EGP"), ("shopping", "EUR")}
+    assert sum(t for g, _, c, t in buckets if c == "EGP") == Decimal("159")
     db.close()
 
 
@@ -267,13 +345,14 @@ def test_chat_tool_loop_uses_server_numbers_and_persists_history(monkeypatch):
     def fake_create(**kwargs):
         calls.append(kwargs)
         if len(calls) == 1:
-            args = {"start": None, "end": None, "group_by": None, "merchant": None, "category": None}
+            args = {"start": None, "end": None, "group_by": None, "merchant": None, "category": None,
+                    "currency": None, "convert_to": None, "compare_start": None, "compare_end": None}
             call = SimpleNamespace(id="c1", function=SimpleNamespace(
                 name="spending_summary", arguments=json.dumps(args)))
             return _completion(SimpleNamespace(content=None, tool_calls=[call]), "tool_calls")
         tool_result = json.loads(kwargs["messages"][-1]["content"])
         return _completion(SimpleNamespace(
-            content=f"You spent {tool_result[0]['total']:.2f} EGP.", tool_calls=None))
+            content=f"You spent {tool_result['rows'][0]['total']} EGP.", tool_calls=None))
 
     monkeypatch.setattr(chat_service.client.chat.completions, "create", fake_create)
     from app.main import app

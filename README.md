@@ -49,7 +49,7 @@ There are three user-facing flows. They share one PostgreSQL database and one Az
 |---|---|
 | **Capture** | Upload a file, store it, and extract merchant, date, items and totals with one vision-model call, in the background. |
 | **Review** | Anything doubtful is flagged "needs review". The user sees the original beside the extracted data and corrects it. |
-| **Insight** | A dashboard and a chat assistant answer from the data. Every number is computed by SQL, never by the model. |
+| **Insight** | A dashboard and a chat assistant answer from the data. Every number is computed by backend code (SQL and `Decimal` arithmetic), never by the model. |
 
 ---
 
@@ -119,7 +119,7 @@ user message
      │
      ▼
  ┌─ model call ──────────────────────────────┐
- │   wants data?  ──yes──▶ run tool(s) in SQL ──▶ feed JSON results back ─┐
+ │   wants data?  ──yes──▶ run tool(s) in code ─▶ feed JSON results back ─┐
  │        │ no                                                            │
  │        ▼                                  (at most 4 steps; the last step has tools disabled)
  │   final answer ◀──────────────────────────────────────────────────────┘
@@ -131,21 +131,29 @@ user message
 
 ### Tools
 
+Every tool returns an envelope: `status` (`ok`, `no_results`, `ambiguous`, `error`), the data, what was `searched` when nothing matched, and `limitations` (receipts without a total that were left out, how much of a figure rests on receipts that need review). Amounts are exact decimals; dates are `YYYY-MM-DD`.
+
 | Tool | Arguments the model can set | Returns |
 |---|---|---|
-| `spending_summary` | start, end, group_by (merchant / month / category / none), merchant, category | total, receipt count and average, **per currency** |
-| `list_receipts` | start, end, merchant, category, limit | receipts with merchant, date, total, currency, status |
-| `list_items` | query, merchant, start, end, limit | purchased items with quantity and prices |
-| `convert_currency` | amount, from, to | converted amount and rate date (rates cached 1 hour) |
+| `spending_summary` | start, end, group_by (merchant / category / month / day), merchant, category, currency, convert_to, compare_start, compare_end | per currency: total, receipts, average, tax, other charges, needs-review share, verified count; `daily_average` for a date range; converted totals with their rate basis; differences and percent change against a second period |
+| `find_receipts` | start, end, merchant, category, currency, status (counted / needs_review / failed / processing / all), text, sort (newest / oldest / largest / smallest / recently_uploaded), limit | receipts with total, tax, status, `verification` and review reasons; by-amount sorts are ranked within each currency |
+| `get_receipt` | receipt_id | one receipt with line items, items total, tax, charges, missing fields, and whether the items add up |
+| `find_items` | query, merchant, start, end, mode (list / summary), sort (newest / highest_price / highest_total), limit | purchases, or per item: times bought, total quantity and total spent |
+| `account_overview` | — | receipts by status (including failed and processing), first and latest receipt dates, currencies, receipts that need review and why |
+| `convert_currency` | amount, from, to | converted amount, rate basis and date |
+
+**Verification.** Each receipt is `verified` (the user confirmed or corrected it, `receipt.confirmed_at`), `extracted` (accepted by the automatic checks) or `needs_review`. Tools report this so answers can say when a figure rests on values nobody has checked.
+
+**Currency conversion** (`app/services/fx_service.py`) converts each receipt day at that day's rate when historical rates are available (cached in `fx_rates`; they never change) and otherwise at today's rate, marked `approximate`. Historical rates need a paid CurrencyFreaks plan; on the free plan the API refuses them, the service stops asking, and every conversion is labelled as today's rate. Codes with no published rate are left out and listed.
 
 ### Why it's accurate and safe
 
-- **The model never calculates and never writes SQL.** It picks a tool and fills typed arguments. Every figure in an answer comes from a tool result.
+- **The model never calculates and never writes SQL.** It picks a tool and fills typed arguments. Totals, averages, daily averages, differences, percentages and conversions are computed by backend code with `Decimal` arithmetic.
 - **`user_id` is not an argument.** Tools are closures built per request (`build_tools(db, user_id)`), so a prompt-injected "show me user 2's data" cannot change who is queried.
 - Tool schemas are `strict`: the model's arguments always validate.
-- Only `ready` and `needs_review` receipts count in totals. `processing` and `failed` receipts are excluded.
-- Currencies are never mixed. The assistant is told to report each currency separately or to call `convert_currency`.
-- A tool error is returned to the model as `{"error": …}`, and the database session is rolled back so one failure can't poison the rest of the turn.
+- Only `ready` and `needs_review` receipts count in totals. `processing` and `failed` receipts are excluded, and receipts without a readable total are counted separately instead of skewing averages.
+- Currencies are never mixed: totals are per currency, ranking by amount happens within a currency, and a single figure across currencies only comes from a conversion that states its basis.
+- A tool error comes back as `{"status": "error", "error": {code, retryable}}` without internal details, and the database session is rolled back so one failure can't poison the rest of the turn.
 
 ### History
 
@@ -177,6 +185,8 @@ users ──< receipt ──< receipt_items
   │
   ├──< chat_messages        (user_id, thread_id, role, content)
   └──< llm_usage            (user_id, kind, deployment, input_tokens, output_tokens)
+
+fx_rates                    (rate_date, currency, usd_rate) — historical exchange-rate cache
 ```
 
 All child tables use `ON DELETE CASCADE`, so deleting a user removes everything they own.
@@ -192,6 +202,7 @@ All child tables use `ON DELETE CASCADE`, so deleting a user removes everything 
 | `category` | groceries, dining, transport, shopping, bills, health, entertainment, other |
 | `raw_text` | The model's transcription; used by search |
 | `image_key` | Storage key of the original: `{user_id}/{uuid}{ext}` |
+| `confirmed_at` | When the user confirmed or corrected it (values are then verified, not just extracted) |
 | `updated_at` | Used to detect stuck jobs |
 
 Indexes: `(user_id, receipt_date)` for date-range queries, `status`, `receipt_items(receipt_id)`, `chat_messages(user_id, thread_id, id)`, `llm_usage(user_id, created_at)`.
@@ -373,7 +384,7 @@ CI (`.github/workflows/ci.yml`) runs lint, all tests against a Postgres service,
 - **One vision call instead of OCR then parsing.** Plain-text OCR loses layout, which is what separates a total from a payment line. The model reads the image directly and returns typed JSON.
 - **Flag, don't reject.** Users prefer fixing one field to re-uploading. Flagged receipts still count in totals, and the dashboard and chat call them out so the numbers aren't trusted blindly.
 - **Code computes, the model phrases.** Sums, averages and trends come from SQL; the model chooses a tool and writes the sentence.
-- **Fixed tools over generated SQL.** Four typed tools cover the questions people ask about receipts, and they can be tested and scoped to a user in code.
+- **Fixed tools over generated SQL.** A small set of typed tools covers the questions people ask about receipts, and they can be tested and scoped to a user in code.
 - **A status column instead of a job queue.** It gives progress in the UI, restart recovery and retries with no extra infrastructure.
 - **No agents framework, no vector database.** The data is small and structured; SQL is the right retrieval layer.
 

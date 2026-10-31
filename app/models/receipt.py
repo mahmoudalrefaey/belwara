@@ -47,6 +47,8 @@ class Receipt(Base):
     category = Column(String(30))
     raw_text = Column(Text)
     image_key = Column(String(255))  # storage key of the original upload
+    # Set when the user corrects or confirms the receipt: its values are then verified, not just extracted.
+    confirmed_at = Column(DateTime(timezone=True))
     source_filename = Column(String(255))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at = Column(
@@ -68,6 +70,13 @@ class Receipt(Base):
     @property
     def has_image(self) -> bool:
         return self.image_key is not None
+
+    @property
+    def verification(self) -> str:
+        """verified (a person confirmed it) | needs_review (flagged) | extracted (accepted automatically)."""
+        if self.status == STATUS_NEEDS_REVIEW:
+            return "needs_review"
+        return "verified" if self.confirmed_at is not None else "extracted"
 
 
 class ReceiptItem(Base):
