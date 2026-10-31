@@ -310,6 +310,37 @@ def daily_buckets(
     return out
 
 
+def merchant_names(
+    db: Session, user_id: int, *, start: Optional[date] = None, end: Optional[date] = None,
+    category: Optional[str] = None,
+) -> List[Tuple[str, int, int]]:
+    """(stored merchant name, counted receipts, receipts inside the given period/category)."""
+    scoped = _filter_receipts(db.query(Receipt.receipt_id), start=start, end=end, category=category)
+    in_scope = Receipt.receipt_id.in_(scoped.filter(Receipt.user_id == user_id).scalar_subquery())
+    rows = (
+        db.query(Receipt.merchant_name, func.count(), func.sum(case((in_scope, 1), else_=0)))
+        .filter(Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES),
+                Receipt.merchant_name.isnot(None))
+        .group_by(Receipt.merchant_name)
+        .all()
+    )
+    return [(n, c, int(k or 0)) for n, c, k in rows]
+
+
+def item_names(
+    db: Session, user_id: int, *, merchants: Optional[Sequence[str]] = None,
+    start: Optional[date] = None, end: Optional[date] = None,
+) -> List[Tuple[str, int]]:
+    """(stored item name, times bought) among counted receipts in scope."""
+    q = (
+        db.query(ReceiptItem.item_name, func.count())
+        .join(Receipt, ReceiptItem.receipt_id == Receipt.receipt_id)
+        .filter(Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES))
+    )
+    q = _filter_receipts(q, start=start, end=end, merchants=merchants)
+    return q.group_by(ReceiptItem.item_name).all()
+
+
 ITEM_SORTS = {
     "newest": (Receipt.receipt_date.desc().nulls_last(),),
     "highest_price": (ReceiptItem.unit_price.desc(), Receipt.receipt_date.desc()),

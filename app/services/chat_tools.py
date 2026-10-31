@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.models.receipt import COUNTED_STATUSES, Receipt
-from app.services import fx_service, receipt_service
+from app.services import fx_service, match_service, receipt_service
 from app.services.receipt_service import money
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,12 @@ _DATE_RANGE = {
     "end": _nullable("string", "Inclusive end date YYYY-MM-DD, or null for no upper bound."),
 }
 _MERCHANT = _nullable("string", "Merchant name as the user wrote it, or null.")
+_ALTERNATIVES = {
+    "type": ["array", "null"],
+    "items": {"type": "string"},
+    "description": "Other ways the name may be written on receipts: the other script (Arabic or "
+                   "English), a transliteration, a common synonym. Null if none.",
+}
 _CATEGORY = _nullable("string", "Receipt category, or null.", enum=[*_CATEGORIES, None])
 _CURRENCY = _nullable("string", "Only receipts in this ISO currency code, or null for all.")
 
@@ -88,6 +94,7 @@ TOOL_SPECS = [
             "group_by": _nullable("string", "Group rows by this, or null for one total per currency.",
                                   enum=["merchant", "category", "month", "day", None]),
             "merchant": _MERCHANT,
+            "merchant_alternatives": _ALTERNATIVES,
             "category": _CATEGORY,
             "currency": _CURRENCY,
             "convert_to": _nullable("string", "Also give totals converted into this ISO currency, or null."),
@@ -102,6 +109,7 @@ TOOL_SPECS = [
         {
             **_DATE_RANGE,
             "merchant": _MERCHANT,
+            "merchant_alternatives": _ALTERNATIVES,
             "category": _CATEGORY,
             "currency": _CURRENCY,
             "status": _nullable(
@@ -128,7 +136,9 @@ TOOL_SPECS = [
         "bought, total quantity and total spent.",
         {
             "query": _nullable("string", "Item name as the user wrote it, or null for all items."),
+            "query_alternatives": _ALTERNATIVES,
             "merchant": _MERCHANT,
+            "merchant_alternatives": _ALTERNATIVES,
             **_DATE_RANGE,
             "mode": {"type": "string", "enum": ["list", "summary"]},
             "sort": _nullable("string", "For mode=list (default newest).",
@@ -238,12 +248,60 @@ def _quality_notes(rows: List[dict]) -> List[str]:
     return notes
 
 
+_SUMMED = ("total", "receipts", "missing_total", "tax", "other_charges", "needs_review",
+           "needs_review_amount", "verified")
+
+
+def _merge_spellings(rows: List[dict], leads: Dict[str, str]) -> List[dict]:
+    """Merge merchant rows stored under different spellings of the same merchant."""
+    merged: Dict[tuple, dict] = {}
+    for r in rows:
+        lead = leads.get(r["group"], r["group"])
+        key = (lead, r["currency"])
+        if key not in merged:
+            merged[key] = {**r, "group": lead}
+        else:
+            m = merged[key]
+            for k in _SUMMED:
+                if k in r:
+                    m[k] = m[k] + r[k]
+        if r["group"] != lead:
+            merged[key].setdefault("also_stored_as", []).append(r["group"])
+    out = list(merged.values())
+    for r in out:
+        if "receipts" in r:
+            r["average"] = money(r["total"] / r["receipts"]) if r["receipts"] else None
+    return sorted(out, key=lambda r: r["total"], reverse=True)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  TOOLS
 # ═════════════════════════════════════════════════════════════════════════════
 
 def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
     """Tool name → callable, each closed over this request's db session and user."""
+
+    def _merchant(name, alternatives, start=None, end=None, category=None):
+        """None when no merchant was given; otherwise which stored names the person means."""
+        if not name:
+            return None
+        scoped = bool(start or end or category)
+        names = receipt_service.merchant_names(db, user_id, start=start, end=end, category=category)
+        return match_service.match_names(name, alternatives, [
+            match_service.Candidate(n, c, k if scoped else None) for n, c, k in names
+        ])
+
+    def _ambiguous(match, per_group: Callable[[List[str]], dict]) -> dict:
+        return {
+            "status": "ambiguous",
+            "match": match.describe(),
+            "candidates": [{"merchant": g.name, **({"also_stored_as": g.variants[1:]} if len(g.variants) > 1
+                                                   else {}), **per_group(g.variants)} for g in match.groups],
+            "note": "These are different merchants. Report them separately or ask which one is meant.",
+        }
+
+    def _leads(rows: List[dict]) -> Dict[str, str]:
+        return match_service.cluster_names([(r["group"], r["receipts"]) for r in rows if r.get("group")])
 
     def _converted(group_by, convert_to, **filters) -> dict:
         buckets = receipt_service.daily_buckets(db, user_id, group_by=group_by, **filters)
@@ -273,17 +331,29 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
             out["not_converted"] = left_out
         return out
 
-    def spending_summary(start, end, group_by, merchant, category, currency, convert_to,
-                         compare_start, compare_end):
+    def spending_summary(start, end, group_by, merchant, merchant_alternatives, category, currency,
+                         convert_to, compare_start, compare_end):
         s, e = _date(start), _date(end)
         if s and e and s > e:
             return _error("invalid_arguments", "start is after end")
-        filters = dict(merchant=merchant, category=category, currency=currency)
+        searched = {"start": start, "end": end, "merchant": merchant, "category": category,
+                    "currency": currency, "group_by": group_by}
+        match = _merchant(merchant, merchant_alternatives, s, e, category)
+        if match and match.status == "no_results":
+            return _no_results(searched, match=match.describe())
+        if match and match.status == "ambiguous":
+            return _ambiguous(match, lambda names: {"rows": receipt_service.spending_summary(
+                db, user_id, start=s, end=e, merchants=names, category=category, currency=currency)})
+        filters = dict(merchants=match.matched if match else None, category=category, currency=currency)
         rows = receipt_service.spending_summary(db, user_id, start=s, end=e, group_by=group_by, **filters)
-        searched = {"start": start, "end": end, **filters, "group_by": group_by}
         if not rows:
-            return _no_results(searched)
+            return _no_results(searched, **({"match": match.describe()} if match else {}))
+        leads = _leads(rows) if group_by == "merchant" else {}
+        if leads:
+            rows = _merge_spellings(rows, leads)
         out = {"rows": rows}
+        if match:
+            out["match"] = match.describe()
         if s and e:
             days = (min(e, date.today()) - s).days + 1
             if days > 0:
@@ -291,18 +361,16 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
                 if not group_by:
                     for r in rows:
                         r["daily_average"] = money(r["total"] / days)
-        if convert_to:
-            if group_by in (None, "merchant", "category", "month"):
-                merchants = None
-                if merchant:
-                    merchants = [r["group"] for r in receipt_service.spending_summary(
-                        db, user_id, start=s, end=e, group_by="merchant", **filters)]
-                out["converted"] = _converted(group_by, convert_to, start=s, end=e, merchants=merchants,
-                                              category=category, currency=currency)
+        if convert_to and group_by in (None, "merchant", "category", "month"):
+            out["converted"] = _converted(group_by, convert_to, start=s, end=e, **filters)
+            if leads:
+                out["converted"]["rows"] = _merge_spellings(out["converted"]["rows"], leads)
         if compare_start or compare_end:
             cs, ce = _date(compare_start), _date(compare_end)
             other = receipt_service.spending_summary(db, user_id, start=cs, end=ce, group_by=group_by,
                                                      **filters)
+            if group_by == "merchant":
+                other = _merge_spellings(other, {**_leads(other), **leads})
             key = lambda r: (r.get("group"), r["currency"])  # noqa: E731
             mine, theirs = {key(r): r for r in rows}, {key(r): r for r in other}
             changes = []
@@ -321,13 +389,23 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
                                  "rows": other, "changes": changes}
         return _ok(_quality_notes(rows), **out)
 
-    def find_receipts(start, end, merchant, category, currency, status, text, sort, limit):
+    def find_receipts(start, end, merchant, merchant_alternatives, category, currency, status, text, sort,
+                      limit):
         statuses = {None: COUNTED_STATUSES, "counted": COUNTED_STATUSES, "all": None}.get(status, [status])
         sort = sort or "newest"
-        kwargs = dict(start=_date(start), end=_date(end), merchant=merchant, category=category,
-                      currency=currency, statuses=statuses, text=text, sort=sort)
         searched = {"start": start, "end": end, "merchant": merchant, "category": category,
                     "currency": currency, "status": status, "text": text}
+        match = _merchant(merchant, merchant_alternatives, _date(start), _date(end), category)
+        if match and match.status == "no_results":
+            return _no_results(searched, match=match.describe())
+        kwargs = dict(start=_date(start), end=_date(end), merchants=match.matched if match else None,
+                      category=category, currency=currency, statuses=statuses, text=text, sort=sort)
+        if match and match.status == "ambiguous":
+            def receipts_of(names):
+                rows, n = receipt_service.list_receipts_page(db, user_id, limit=3, offset=0,
+                                                             **{**kwargs, "merchants": names})
+                return {"total_matching": n, "receipts": [_receipt_row(r) for r in rows]}
+            return _ambiguous(match, receipts_of)
         if sort in ("largest", "smallest") and not currency:
             # Amounts in different currencies can't be ranked against each other.
             by_currency = {}
@@ -341,16 +419,17 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
                     by_currency[cur] = [_receipt_row(r) for r in rows]
                     total += n
             if not by_currency:
-                return _no_results(searched)
+                return _no_results(searched, **({"match": match.describe()} if match else {}))
             return _ok(
                 ["Ranked within each currency; amounts in different currencies are not comparable."]
                 if len(by_currency) > 1 else None,
                 sort=sort, total_matching=total, by_currency=by_currency,
             )
         rows, total = receipt_service.list_receipts_page(db, user_id, limit=_limit(limit), offset=0, **kwargs)
+        extra = {"match": match.describe()} if match else {}
         if not rows:
-            return _no_results(searched)
-        return _ok(sort=sort, total_matching=total, receipts=[_receipt_row(r) for r in rows])
+            return _no_results(searched, **extra)
+        return _ok(sort=sort, total_matching=total, receipts=[_receipt_row(r) for r in rows], **extra)
 
     def get_receipt(receipt_id):
         r = receipt_service.get_receipt_by_id(db, int(receipt_id), user_id)
@@ -377,28 +456,41 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
                          + (" and are flagged for review." if r.status == "needs_review" else "."))
         return _ok(notes, receipt=row)
 
-    def find_items(query, merchant, start, end, mode, sort, limit):
-        kwargs = dict(query=query, start=_date(start), end=_date(end))
+    def find_items(query, query_alternatives, merchant, merchant_alternatives, start, end, mode, sort, limit):
+        s, e = _date(start), _date(end)
         searched = {"query": query, "merchant": merchant, "start": start, "end": end}
+        match = _merchant(merchant, merchant_alternatives, s, e)
+        if match and match.status == "no_results":
+            return _no_results(searched, match=match.describe())
+        if match and match.status == "ambiguous":
+            return _ambiguous(match, lambda names: {"items_bought": sum(
+                n for _, n in receipt_service.item_names(db, user_id, merchants=names, start=s, end=e))})
+        merchants = match.matched if match else None
+        extra = {"match": match.describe()} if match else {}
+        names = None
+        if query:
+            found = match_service.match_names(
+                query, query_alternatives, receipt_service.item_names(db, user_id, merchants=merchants,
+                                                                      start=s, end=e), union=True)
+            extra["item_match"] = found.describe()
+            if found.status != "ok":
+                return _no_results(searched, **extra)
+            names = found.matched
+        kwargs = dict(names=names, merchants=merchants, start=s, end=e)
         if mode == "summary":
-            merchants = None
-            if merchant:
-                merchants = [r["group"] for r in receipt_service.spending_summary(
-                    db, user_id, group_by="merchant", merchant=merchant)]
-            rows = receipt_service.item_summary(db, user_id, merchants=merchants, **kwargs)
+            rows = receipt_service.item_summary(db, user_id, **kwargs)
             if not rows:
-                return _no_results(searched)
-            return _ok(items=[{**r, "last_bought": _day(r["last_bought"])} for r in rows])
-        rows = receipt_service.list_items(db, user_id, merchant=merchant, sort=sort or "newest",
-                                          limit=_limit(limit), **kwargs)
+                return _no_results(searched, **extra)
+            return _ok(items=[{**r, "last_bought": _day(r["last_bought"])} for r in rows], **extra)
+        rows = receipt_service.list_items(db, user_id, sort=sort or "newest", limit=_limit(limit), **kwargs)
         if not rows:
-            return _no_results(searched)
+            return _no_results(searched, **extra)
         return _ok(items=[{
             "item": r["item_name"], "quantity": r["quantity"], "unit_price": money(r["unit_price"]),
             "line_total": money(r["line_total"]), "currency": r["currency"], "merchant": r["merchant_name"],
             "date": _day(r["receipt_date"]), "receipt_id": r["receipt_id"],
             "verification": _verification(r["status"], r["confirmed_at"]),
-        } for r in rows])
+        } for r in rows], **extra)
 
     def account_overview():
         o = receipt_service.account_overview(db, user_id)

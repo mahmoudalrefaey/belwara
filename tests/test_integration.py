@@ -29,6 +29,7 @@ from app.models import ChatMessage, Receipt, ReceiptItem, User  # noqa: E402
 from app.models.usage import LlmUsage  # noqa: E402
 from app.services import (  # noqa: E402
     chat_service,
+    chat_tools,
     extract_service,
     receipt_service,
     storage_service,
@@ -345,7 +346,8 @@ def test_chat_tool_loop_uses_server_numbers_and_persists_history(monkeypatch):
     def fake_create(**kwargs):
         calls.append(kwargs)
         if len(calls) == 1:
-            args = {"start": None, "end": None, "group_by": None, "merchant": None, "category": None,
+            args = {"start": None, "end": None, "group_by": None, "merchant": None,
+                    "merchant_alternatives": None, "category": None,
                     "currency": None, "convert_to": None, "compare_start": None, "compare_end": None}
             call = SimpleNamespace(id="c1", function=SimpleNamespace(
                 name="spending_summary", arguments=json.dumps(args)))
@@ -443,3 +445,71 @@ def test_export_and_delete_account(monkeypatch):
     assert db.query(Receipt).count() == 0 and db.query(LlmUsage).count() == 0
     db.close()
     assert list(storage_service._LOCAL_DIR.rglob("*.png")) == []
+
+
+# ── chat tools with name matching ───────────────────────────────────────────
+
+def _tool(user_id, name, **args):
+    db = SessionLocal()
+    try:
+        tools = chat_tools.build_tools(db, user_id)
+        return json.loads(chat_tools.run_tool(db, tools, name, json.dumps(args)))
+    finally:
+        db.close()
+
+
+SUMMARY = {"start": None, "end": None, "group_by": None, "merchant": None, "merchant_alternatives": None,
+           "category": None, "currency": None, "convert_to": None, "compare_start": None,
+           "compare_end": None}
+
+
+def test_ocr_spellings_of_one_merchant_are_found_and_kept_as_stored():
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    _receipt(db, a, "حواوشي علاء", 100, category="dining")
+    _receipt(db, a, "حواوشى فلاء", 50, category="dining")   # OCR damage on the same shop
+    _receipt(db, a, "حلواني علاء", 999, category="dining")  # a different shop
+    db.close()
+
+    out = _tool(a, "spending_summary", **{**SUMMARY, "merchant": "حواوشي علاء"})
+    assert out["status"] == "ok" and out["rows"][0]["total"] == "150.00"
+    assert out["match"]["matched"][0]["also_stored_as"] == ["حواوشى فلاء"]
+
+    by = _tool(a, "spending_summary", **{**SUMMARY, "group_by": "merchant"})
+    assert len(by["rows"]) == 2  # the two spellings are one row; the other shop stays separate
+    [shop] = [r for r in by["rows"] if r["total"] == "150.00"]
+    assert {shop["group"], *shop["also_stored_as"]} == {"حواوشي علاء", "حواوشى فلاء"}
+
+    db = SessionLocal()
+    stored = sorted(n for (n,) in db.query(Receipt.merchant_name))
+    assert stored == ["حلواني علاء", "حواوشى فلاء", "حواوشي علاء"]  # nothing rewritten
+    db.close()
+
+
+def test_a_shared_word_is_ambiguous_with_separate_figures():
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    _receipt(db, a, "كبدة علاء", 40)
+    _receipt(db, a, "حلواني علاء", 60)
+    db.close()
+    out = _tool(a, "spending_summary", **{**SUMMARY, "merchant": "علاء"})
+    assert out["status"] == "ambiguous"
+    assert {c["merchant"]: c["rows"][0]["total"] for c in out["candidates"]} == {
+        "كبدة علاء": "40.00", "حلواني علاء": "60.00"}
+    assert "rows" not in out  # never one merged figure
+
+
+def test_unknown_merchant_says_what_was_searched_and_items_use_alternatives():
+    db = SessionLocal()
+    a = _user(db, "a@x.com")
+    _receipt(db, a, "Seoudi Market", 80, items=[("لبن جهينة", 30), ("لبنة", 50)])
+    db.close()
+    out = _tool(a, "find_receipts", start=None, end=None, merchant="Spinneys", merchant_alternatives=None,
+                category=None, currency=None, status=None, text=None, sort=None, limit=5)
+    assert out["status"] == "no_results" and out["searched"]["merchant"] == "Spinneys"
+
+    items = {"query": "milk", "query_alternatives": None, "merchant": None, "merchant_alternatives": None,
+             "start": None, "end": None, "mode": "summary", "sort": None, "limit": 10}
+    assert _tool(a, "find_items", **items)["status"] == "no_results"
+    out = _tool(a, "find_items", **{**items, "query_alternatives": ["لبن", "حليب"]})
+    assert [i["item"] for i in out["items"]] == ["لبن جهينة"]  # labneh is not milk

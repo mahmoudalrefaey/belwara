@@ -8,7 +8,8 @@ import pytest
 
 from app.services import chat_tools, fx_service
 
-SUMMARY_ARGS = {"start": None, "end": None, "group_by": None, "merchant": None, "category": None,
+SUMMARY_ARGS = {"start": None, "end": None, "group_by": None, "merchant": None, "merchant_alternatives": None,
+                "category": None,
                 "currency": None, "convert_to": None, "compare_start": None, "compare_end": None}
 
 
@@ -69,7 +70,8 @@ def test_run_tool_rolls_back_after_a_failed_query(monkeypatch):
     monkeypatch.setattr(chat_tools.receipt_service, "list_items", boom)
     db = MagicMock()
     tools = chat_tools.build_tools(db, user_id=1)
-    args = json.dumps({"query": None, "merchant": None, "start": None, "end": None, "mode": "list",
+    args = json.dumps({"query": None, "query_alternatives": None, "merchant": None,
+                       "merchant_alternatives": None, "start": None, "end": None, "mode": "list",
                        "sort": None, "limit": 10})
     out = json.loads(chat_tools.run_tool(db, tools, "find_items", args))
     assert out["status"] == "error" and out["error"]["retryable"] is True
@@ -135,7 +137,8 @@ def test_largest_is_ranked_within_each_currency(monkeypatch):
 
     monkeypatch.setattr(chat_tools.receipt_service, "list_receipts_page", fake_list)
     out = _call(chat_tools.build_tools(MagicMock(), user_id=1), "find_receipts", start=None, end=None,
-                merchant=None, category=None, currency=None, status=None, text=None, sort="largest", limit=3)
+                merchant=None, merchant_alternatives=None, category=None, currency=None, status=None,
+                text=None, sort="largest", limit=3)
     assert set(out["by_currency"]) == {"EGP", "EUR"} and seen == ["EGP", "EUR"]
     assert "not comparable" in out["limitations"][0]
 
