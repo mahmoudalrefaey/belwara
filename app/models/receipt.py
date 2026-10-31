@@ -7,7 +7,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
-    Integer,
     Numeric,
     String,
     Text,
@@ -90,7 +89,7 @@ class ReceiptItem(Base):
         index=True,
     )
     item_name = Column(String(150), nullable=False)
-    quantity = Column(Integer, nullable=False)
+    quantity = Column(Numeric(10, 3), nullable=False)  # a count, or a weight such as 1.5 (kg)
     unit_price = Column(Numeric(10, 2), nullable=False)
     line_total = Column(Numeric(10, 2), nullable=False)
     taxes = Column(Numeric(10, 2), nullable=False, default=0)

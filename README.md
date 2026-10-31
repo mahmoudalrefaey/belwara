@@ -94,11 +94,14 @@ These run in plain Python after the model call. Most of them only flag a problem
 | Missing merchant, date, total or currency | flag `missing_<field>` |
 | Total is zero or negative | flag `invalid_total` |
 | Date more than a day in the future, or older than 2 years | flag `date_in_future`, `date_too_old` |
+| An item's unit price × quantity doesn't match its line total (2% tolerance) | flag `line_price_mismatch` |
 | Sum of item totals matches neither the total, the total minus tax and charges, nor the subtotal (2% tolerance) | flag `items_sum_mismatch` |
 | Another non-failed receipt with the same merchant, date and total | flag `possible_duplicate` |
 | Model says it isn't a receipt | status `failed`, reason `not_a_receipt` |
 
-Missing unit or line prices are filled from quantity. Per-item tax is `line_total × tax_rate / 100` when a rate was printed.
+Quantities are a count or, for goods sold by weight, the weight (`Numeric(10,3)`: 1.5 kg is stored as 1.5, not rounded into the item name). Missing unit or line prices are filled from quantity. Per-item tax is `line_total × tax_rate / 100` when a rate was printed.
+
+Currency codes are validated against ISO 4217 (`app/core/currencies.py`) when a receipt is created or corrected, and the edit form only accepts real codes. Migration `004` flagged receipts stored earlier with a code that isn't a currency (`needs_review`, reason `invalid_currency`), keeping the stored value so the user can see and fix it.
 
 ### Recovery and corrections
 

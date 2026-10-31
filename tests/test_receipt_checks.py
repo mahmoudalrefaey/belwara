@@ -107,16 +107,35 @@ def test_vat_rate_distributes_item_taxes():
     assert items[0]["taxes"] == Decimal("5.6")
 
 
-def test_blank_items_dropped_and_quantity_at_least_one():
-    _, items, _ = build_receipt_data(
-        _receipt(items=[
+def test_blank_items_dropped_and_weights_kept_as_quantity():
+    _, items, reasons = build_receipt_data(
+        _receipt(subtotal=None, total_amount=100.0, items=[
             ExtractedItem(item_name=" ", quantity=1, unit_price=1.0, line_total=1.0),
             ExtractedItem(item_name="Tomatoes", quantity=0.4, unit_price=None, line_total=100.0),
         ]),
         TODAY,
     )
     assert [i["item_name"] for i in items] == ["Tomatoes"]
-    assert items[0]["quantity"] == 1
+    assert items[0]["quantity"] == Decimal("0.4")          # a weight, not rounded to 1
+    assert items[0]["unit_price"] == Decimal("250.00")     # price per kg
+    assert "line_price_mismatch" not in reasons
+
+
+def test_missing_quantity_defaults_to_one():
+    _, items, _ = build_receipt_data(
+        _receipt(items=[ExtractedItem(item_name="Bag", quantity=0, unit_price=5.0, line_total=5.0)]), TODAY
+    )
+    assert items[0]["quantity"] == Decimal(1)
+
+
+def test_price_times_quantity_that_misses_the_line_total_is_flagged():
+    _, _, reasons = build_receipt_data(
+        _receipt(subtotal=None, total_amount=2799.0, items=[
+            ExtractedItem(item_name="Laptop", quantity=1, unit_price=799.0, line_total=2799.0),
+        ]),
+        TODAY,
+    )
+    assert "line_price_mismatch" in reasons
 
 
 def test_unsupported_and_corrupt_files_raise():
@@ -131,3 +150,14 @@ def test_large_image_is_downscaled_to_jpeg():
     Image.new("RGB", (4000, 1000), "white").save(buf, format="PNG")
     (url,) = _pages_as_data_urls(buf.getvalue(), ".png")
     assert url.startswith("data:image/jpeg;base64,")
+
+
+def test_corrections_need_a_real_currency_code():
+    from pydantic import ValidationError
+
+    from app.schemas.receipt import ReceiptUpdate
+
+    assert ReceiptUpdate(currency=" egp ").currency == "EGP"
+    for code in ("TUR", "SUR", "LE"):
+        with pytest.raises(ValidationError):
+            ReceiptUpdate(currency=code)

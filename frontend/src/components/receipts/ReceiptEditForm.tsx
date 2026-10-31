@@ -7,6 +7,7 @@ import { Loader2, Plus, X } from "lucide-react";
 import type { ReceiptResponse, ReceiptUpdate } from "@/types/api";
 import { useUpdateReceipt } from "@/hooks/useReceipts";
 import { num } from "@/lib/format";
+import { COMMON_CURRENCIES, isCurrency } from "@/lib/currencies";
 import { CATEGORIES } from "@/lib/receiptStatus";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,7 +38,7 @@ export default function ReceiptEditForm({
   const [items, setItems] = useState<ItemRow[]>(
     receipt.items.map((i) => ({
       item_name: i.item_name,
-      quantity: String(i.quantity),
+      quantity: String(num(i.quantity)),
       line_total: String(num(i.line_total)),
     })),
   );
@@ -54,11 +55,17 @@ export default function ReceiptEditForm({
       setError(t("required"));
       return;
     }
+    if (!isCurrency(currency)) {
+      setError(t("currencyInvalid"));
+      return;
+    }
     setError(null);
     const cleanItems = items
       .filter((r) => r.item_name.trim())
       .map((r) => {
-        const quantity = Math.max(1, Math.round(toNumber(r.quantity) || 1));
+        // A count or a weight (1.5 kg); up to three decimals, like the server.
+        const typed = toNumber(r.quantity);
+        const quantity = typed > 0 ? Math.round(typed * 1000) / 1000 : 1;
         const lineTotal = toNumber(r.line_total) || 0;
         return {
           item_name: r.item_name.trim(),
@@ -131,7 +138,12 @@ export default function ReceiptEditForm({
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="e-currency">{t("currency")} *</Label>
-          <Input id="e-currency" maxLength={10} dir="ltr" placeholder="EGP" className="num uppercase" value={currency} onChange={(e) => setCurrency(e.target.value)} required />
+          <Input id="e-currency" list="e-currency-codes" maxLength={3} dir="ltr" placeholder="EGP" className="num uppercase" value={currency} onChange={(e) => setCurrency(e.target.value)} aria-invalid={currency.trim().length === 3 && !isCurrency(currency)} required />
+          <datalist id="e-currency-codes">
+            {COMMON_CURRENCIES.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="e-taxes">{t("taxes")}</Label>
@@ -155,7 +167,7 @@ export default function ReceiptEditForm({
         {items.map((row, i) => (
           <div key={i} className="flex items-center gap-2">
             <Input aria-label={t("itemName")} placeholder={t("itemName")} value={row.item_name} onChange={(e) => setItem(i, { item_name: e.target.value })} />
-            <Input aria-label={t("quantity")} className="num w-16 text-center" inputMode="numeric" dir="ltr" value={row.quantity} onChange={(e) => setItem(i, { quantity: e.target.value })} />
+            <Input aria-label={t("quantity")} className="num w-16 text-center" inputMode="decimal" dir="ltr" value={row.quantity} onChange={(e) => setItem(i, { quantity: e.target.value })} />
             <Input aria-label={t("lineTotal")} className="num w-28" inputMode="decimal" dir="ltr" placeholder="0.00" value={row.line_total} onChange={(e) => setItem(i, { line_total: e.target.value })} />
             <Button type="button" variant="ghost" size="icon-sm" aria-label={t("removeItem")} onClick={() => setItems((rows) => rows.filter((_, j) => j !== i))}>
               <X className="size-4" />

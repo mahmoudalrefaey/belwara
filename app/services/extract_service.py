@@ -73,7 +73,9 @@ Rules:
   discount, total, payment, or thank-you lines as items.
 - When an item shows one price and quantity > 1, decide whether it is a unit or line price so that
   the sum of line_total matches the subtotal (or the total when there is no subtotal).
-- quantity: the printed count; use 1 for weighed items and put the charged amount in line_total.
+- quantity: the printed count, or for items sold by weight the printed weight (e.g. 1.5 for
+  "1.5 kg" or "1.5X"). Keep the weight out of item_name. unit_price is then the price per kg/unit,
+  and line_total the amount charged for the line.
 - other_charges: tips, service charge, delivery fees only.
 - Numbers: Western digits (convert ٠١٢٣٤٥٦٧٨٩), no thousands separators.
 - receipt_date: YYYY-MM-DD. Arabic and Egyptian receipts write day/month/year.
@@ -180,16 +182,19 @@ def build_receipt_data(ex: ExtractedReceipt, today: date) -> Tuple[dict, List[di
             total = round(paid - change, 2)
 
     items: List[dict] = []
+    line_mismatch = False
     for it in ex.items:
         name = it.item_name.strip()[:150]
         if not name:
             continue
-        qty = max(1, round(it.quantity or 1))
+        qty = Decimal(str(round(it.quantity, 3))) if it.quantity and it.quantity > 0 else Decimal(1)
         unit, line = it.unit_price, it.line_total
         if line is None and unit is not None:
-            line = unit * qty
+            line = unit * float(qty)
         if unit is None and line is not None:
-            unit = line / qty
+            unit = line / float(qty)
+        elif unit is not None and line is not None and not _close(unit * float(qty), line):
+            line_mismatch = True
         items.append({
             "item_name": name,
             "quantity": qty,
@@ -223,6 +228,9 @@ def build_receipt_data(ex: ExtractedReceipt, today: date) -> Tuple[dict, List[di
             reasons.append("date_in_future")
         elif receipt_date < today - timedelta(days=2 * 365):
             reasons.append("date_too_old")
+
+    if line_mismatch:
+        reasons.append("line_price_mismatch")
 
     if items and total is not None:
         items_sum = sum(float(i["line_total"]) for i in items)

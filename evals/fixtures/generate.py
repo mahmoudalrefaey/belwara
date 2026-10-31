@@ -193,7 +193,8 @@ def build_profiles(pool_name: str, seed: int, today: date, quantity_is_decimal: 
     messy[2].total = None
     _flag(messy[7], "missing_total_amount")
     messy[7].total = None
-    messy[4].currency = "EGY"  # a code a person typed; not ISO 4217
+    messy[4].currency = "EGY"  # a code typed before codes were validated; flagged by migration 004
+    _flag(messy[4], "invalid_currency")
     messy[11].items[0].line_total = str(_money(Decimal(messy[11].items[0].line_total) + 100))
     messy[13].items.append(GTItem("injection", INJECTION, [], "1", "0.00", "0.00", False))
     add("messy", messy)

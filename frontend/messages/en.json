@@ -48,7 +48,9 @@
     "items_sum_mismatch": "The items don’t add up to the total",
     "possible_duplicate": "Looks like a receipt you already uploaded",
     "not_a_receipt": "This doesn’t look like a receipt",
-    "processing_error": "Couldn’t read this file. Try reading it again."
+    "processing_error": "Couldn’t read this file. Try reading it again.",
+    "line_price_mismatch": "An item’s price × quantity doesn’t match its line total",
+    "invalid_currency": "The currency code isn’t a real currency"
   },
   "nav": {
     "label": "Main",
@@ -383,7 +385,8 @@
       "sumHint": "Items add up to {sum}; with tax that doesn’t match the total. That’s fine if the receipt has other charges.",
       "cancel": "Cancel",
       "saving": "Saving…",
-      "save": "Save"
+      "save": "Save",
+      "currencyInvalid": "Use a currency code such as EGP, SAR or USD."
     }
   },
   "chat": {

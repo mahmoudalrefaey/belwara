@@ -513,3 +513,28 @@ def test_unknown_merchant_says_what_was_searched_and_items_use_alternatives():
     assert _tool(a, "find_items", **items)["status"] == "no_results"
     out = _tool(a, "find_items", **{**items, "query_alternatives": ["لبن", "حليب"]})
     assert [i["item"] for i in out["items"]] == ["لبن جهينة"]  # labneh is not milk
+
+
+def test_migration_flags_codes_that_are_not_currencies_and_keeps_them():
+    cfg = Config("alembic.ini")
+    command.downgrade(cfg, "003_confirmed_at_fx_rates")
+    with engine.begin() as conn:
+        conn.execute(text("INSERT INTO users (user_id, email, password_hash) VALUES (1, 'm@x.com', 'x')"))
+        conn.execute(text(
+            # The ORM writes an empty review_reasons as JSON null, not SQL NULL; both must work.
+            "INSERT INTO receipt (user_id, status, currency, total_amount, total_taxes, other, "
+            "review_reasons) VALUES (1, 'ready', 'TUR', 8, 0, 0, 'null'), "
+            "(1, 'ready', 'EGP', 9, 0, 0, NULL), "
+            "(1, 'needs_review', 'SUR', 8, 0, 0, '[\"date_too_old\"]'), "
+            "(1, 'failed', 'XYZ', NULL, 0, 0, NULL)"
+        ))
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        rows = conn.execute(text(
+            "SELECT currency, status, review_reasons FROM receipt ORDER BY currency")).all()
+    assert [(c, s, r) for c, s, r in rows] == [
+        ("EGP", "ready", None),
+        ("SUR", "needs_review", ["date_too_old", "invalid_currency"]),
+        ("TUR", "needs_review", ["invalid_currency"]),  # flagged, value kept as stored
+        ("XYZ", "failed", None),                        # unreadable uploads are left alone
+    ]

@@ -4,7 +4,9 @@ from datetime import datetime
 from decimal import Decimal
 from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.core.currencies import normalize_currency
 
 ReceiptStatus = Literal["processing", "ready", "needs_review", "failed"]
 
@@ -17,7 +19,7 @@ class DeleteAllReceiptsBody(BaseModel):
 
 class ReceiptItemBase(BaseModel):
     item_name: str = Field(..., max_length=150)
-    quantity: int = Field(..., gt=0)
+    quantity: Decimal = Field(..., gt=0, max_digits=10, decimal_places=3)  # a count or a weight
     unit_price: Decimal = Field(..., ge=0)
     line_total: Decimal = Field(..., ge=0)
     taxes: Decimal = Field(0, ge=0)
@@ -47,6 +49,11 @@ class ReceiptCreate(BaseModel):
     raw_text: Optional[str] = None
     items: List[ReceiptItemCreate]
 
+    @field_validator("currency")
+    @classmethod
+    def _iso_currency(cls, v: str) -> str:
+        return normalize_currency(v)
+
 
 class ReceiptUpdate(BaseModel):
     """User correction (PATCH). Omitted fields are unchanged; `items` replaces all items."""
@@ -59,6 +66,11 @@ class ReceiptUpdate(BaseModel):
     currency: Optional[str] = Field(None, min_length=3, max_length=10)
     category: Optional[str] = Field(None, max_length=30)
     items: Optional[List[ReceiptItemCreate]] = None
+
+    @field_validator("currency")
+    @classmethod
+    def _iso_currency(cls, v: Optional[str]) -> Optional[str]:
+        return normalize_currency(v) if v is not None else v
 
 
 class ReceiptSummary(BaseModel):

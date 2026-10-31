@@ -84,7 +84,7 @@ function PrintedReceipt({ data }: { data: ReceiptResponse }) {
                 {row(
                   <span>
                     {it.item_name}
-                    {it.quantity > 1 && <span className="num text-ink/55"> ×{it.quantity}</span>}
+                    {num(it.quantity) !== 1 && <span className="num text-ink/55"> ×{num(it.quantity)}</span>}
                   </span>,
                   <span className="num">{f.money(it.line_total)}</span>,
                 )}

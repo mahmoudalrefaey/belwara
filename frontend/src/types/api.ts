@@ -59,7 +59,7 @@ export interface ReceiptItemResponse {
   item_id: number;
   receipt_id: number;
   item_name: string;
-  quantity: number;
+  quantity: number | string; // a count or a weight; decimals come as strings
   unit_price: number | string;
   line_total: number | string;
   taxes: number | string;
