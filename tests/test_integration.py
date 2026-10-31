@@ -206,8 +206,8 @@ def test_overview_items_and_conversion_buckets():
     assert priciest[0]["item_name"] == "Bread"
 
     buckets = receipt_service.daily_buckets(db, a, group_by="category")
-    assert {(g, c) for g, _, c, _ in buckets} == {("groceries", "EGP"), ("shopping", "EUR")}
-    assert sum(t for g, _, c, t in buckets if c == "EGP") == Decimal("159")
+    assert {(g, c) for g, _, c, _, _ in buckets} == {("groceries", "EGP"), ("shopping", "EUR")}
+    assert sum(t for g, _, c, t, _ in buckets if c == "EGP") == Decimal("159")
     db.close()
 
 

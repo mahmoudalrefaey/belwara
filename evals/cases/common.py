@@ -105,10 +105,15 @@ def check_range(start: date, end: date, *, end_alternatives: Tuple[date, ...] = 
     return check
 
 
+# What "sorted by amount / date / price" looks like in the tools' sort options.
+_SORTS = {"amount": {"largest", "smallest", "amount"}, "date": {"newest", "oldest", "date"},
+          "price": {"highest_price", "highest_total", "price"}}
+
+
 def check_sorted_by(value: str):
     def check(trace):
         for a in calls(trace, {"list_receipts", "find_receipts", "list_items", "find_items"}):
-            if a.get("sort") == value:
+            if a.get("sort") in _SORTS[value]:
                 return None
         return f"no lookup sorted by {value}"
     return check

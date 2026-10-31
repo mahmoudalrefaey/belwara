@@ -290,8 +290,8 @@ def daily_buckets(
     merchants: Optional[Sequence[str]] = None,
     category: Optional[str] = None,
     currency: Optional[str] = None,
-) -> List[Tuple[Optional[str], Optional[date], str, Decimal]]:
-    """(group, day, currency, total) per receipt day, so each day can be converted at its own rate."""
+) -> List[Tuple[Optional[str], Optional[date], str, Decimal, Decimal]]:
+    """(group, day, currency, total, tax) per receipt day, so each day converts at its own rate."""
     day = func.date(_utc(Receipt.receipt_date))
     group = {
         "merchant": Receipt.merchant_name,
@@ -299,14 +299,15 @@ def daily_buckets(
         "month": func.to_char(_utc(Receipt.receipt_date), "YYYY-MM"),
     }.get(group_by or "")
     cols = [day, Receipt.currency] + ([group] if group is not None else [])
-    q = db.query(*cols, func.sum(Receipt.total_amount)).filter(
+    q = db.query(*cols, func.sum(Receipt.total_amount), func.sum(Receipt.total_taxes)).filter(
         Receipt.user_id == user_id, Receipt.status.in_(COUNTED_STATUSES), Receipt.total_amount.isnot(None)
     )
     q = _filter_receipts(q, start=start, end=end, merchants=merchants, category=category, currency=currency)
     out = []
     for row in q.group_by(*cols).all():
         d, cur, *rest = row
-        out.append((rest[0] if group is not None else None, d, cur, Decimal(rest[-1])))
+        g = rest[0] if group is not None else None
+        out.append((g, d, cur, Decimal(rest[-2]), Decimal(rest[-1] or 0)))
     return out
 
 

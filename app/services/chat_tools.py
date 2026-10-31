@@ -29,6 +29,13 @@ log = logging.getLogger(__name__)
 _RESULT_ROWS = 50
 _CATEGORIES = ["groceries", "dining", "transport", "shopping", "bills", "health", "entertainment", "other"]
 
+STATUS_MEANING = {
+    "ready": "read and counted",
+    "needs_review": "read and counted, but flagged for the user to check",
+    "failed": "upload could not be read at all; not counted",
+    "processing": "still being read; not counted yet",
+}
+
 # Plain wording for review reasons (same meaning as the app's labels in frontend/messages).
 REVIEW_REASONS = {
     "missing_merchant_name": "the merchant name couldn't be read",
@@ -132,8 +139,9 @@ TOOL_SPECS = [
     ),
     _function(
         "find_items",
-        "Purchased line items. mode=list gives each purchase; mode=summary groups by item with times "
-        "bought, total quantity and total spent.",
+        "Purchased line items. mode=list gives each purchase (unit_price is the price of one, "
+        "line_total is what that line cost: unit_price × quantity); mode=summary groups by item with "
+        "times bought, total quantity and total spent.",
         {
             "query": _nullable("string", "Item name as the user wrote it, or null for all items."),
             "query_alternatives": _ALTERNATIVES,
@@ -300,18 +308,29 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
             "note": "These are different merchants. Report them separately or ask which one is meant.",
         }
 
+    def _data_span(start, end) -> dict:
+        """When a period had nothing, say which dates do have receipts."""
+        if not (start or end):
+            return {}
+        o = receipt_service.account_overview(db, user_id)
+        if not o["latest_receipt_date"]:
+            return {"data_exists": None}
+        return {"data_exists": {"first_receipt_date": _day(o["first_receipt_date"]),
+                                "latest_receipt_date": _day(o["latest_receipt_date"])}}
+
     def _leads(rows: List[dict]) -> Dict[str, str]:
         return match_service.cluster_names([(r["group"], r["receipts"]) for r in rows if r.get("group")])
 
     def _converted(group_by, convert_to, **filters) -> dict:
         buckets = receipt_service.daily_buckets(db, user_id, group_by=group_by, **filters)
         groups: Dict[Optional[str], list] = {}
-        for group, day, cur, amount in buckets:
-            groups.setdefault(group, []).append((day, cur, amount))
+        for group, day, cur, amount, tax in buckets:
+            groups.setdefault(group, []).append((day, cur, amount, tax))
         rows, bases, dates, left_out = [], set(), set(), {}
         for group, items in groups.items():
-            c = fx_service.convert(db, items, convert_to)
-            rows.append({**({"group": group} if group_by else {}), "total": c.total})
+            c = fx_service.convert(db, [(d, cur, a) for d, cur, a, _ in items], convert_to)
+            t = fx_service.convert(db, [(d, cur, x) for d, cur, _, x in items], convert_to)
+            rows.append({**({"group": group} if group_by else {}), "total": c.total, "tax": t.total})
             bases.add(c.rate_basis)
             dates.update(c.rate_dates)
             for cur, amount in c.not_converted.items():
@@ -347,7 +366,8 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
         filters = dict(merchants=match.matched if match else None, category=category, currency=currency)
         rows = receipt_service.spending_summary(db, user_id, start=s, end=e, group_by=group_by, **filters)
         if not rows:
-            return _no_results(searched, **({"match": match.describe()} if match else {}))
+            return _no_results(searched, **({"match": match.describe()} if match else {}),
+                               **_data_span(s, e))
         leads = _leads(rows) if group_by == "merchant" else {}
         if leads:
             rows = _merge_spellings(rows, leads)
@@ -357,7 +377,14 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
         if s and e:
             days = (min(e, date.today()) - s).days + 1
             if days > 0:
-                out["period"] = {"start": start, "end": end, "days_counted": days}
+                per_currency: Dict[Optional[str], Decimal] = {}
+                for r in rows:
+                    per_currency[r["currency"]] = per_currency.get(r["currency"], Decimal(0)) + r["total"]
+                out["period"] = {
+                    "start": start, "end": end, "days_counted": days,
+                    "daily_average": [{"currency": c, "per_day": money(t / days)}
+                                      for c, t in per_currency.items()],
+                }
                 if not group_by:
                     for r in rows:
                         r["daily_average"] = money(r["total"] / days)
@@ -428,7 +455,7 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
         rows, total = receipt_service.list_receipts_page(db, user_id, limit=_limit(limit), offset=0, **kwargs)
         extra = {"match": match.describe()} if match else {}
         if not rows:
-            return _no_results(searched, **extra)
+            return _no_results(searched, **extra, **_data_span(_date(start), _date(end)))
         return _ok(sort=sort, total_matching=total, receipts=[_receipt_row(r) for r in rows], **extra)
 
     def get_receipt(receipt_id):
@@ -481,7 +508,18 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
             rows = receipt_service.item_summary(db, user_id, **kwargs)
             if not rows:
                 return _no_results(searched, **extra)
-            return _ok(items=[{**r, "last_bought": _day(r["last_bought"])} for r in rows], **extra)
+            out = {"items": [{**r, "last_bought": _day(r["last_bought"])} for r in rows]}
+            if names and len(rows) > 1:
+                # The person asked about one thing stored under several names: give the whole.
+                combined: Dict[Optional[str], dict] = {}
+                for r in rows:
+                    c = combined.setdefault(r["currency"], {"currency": r["currency"], "times": 0,
+                                                            "quantity": Decimal(0), "spent": Decimal(0)})
+                    c["times"] += r["times"]
+                    c["quantity"] += r["quantity"]
+                    c["spent"] = money(c["spent"] + r["spent"])
+                out["all_matching_items"] = list(combined.values())
+            return _ok(**out, **extra)
         rows = receipt_service.list_items(db, user_id, sort=sort or "newest", limit=_limit(limit), **kwargs)
         if not rows:
             return _no_results(searched, **extra)
@@ -498,6 +536,7 @@ def build_tools(db: Session, user_id: int) -> Dict[str, Callable[..., object]]:
             return _no_results({"receipts": "any"})
         return _ok(
             receipts_by_status=o["receipts_by_status"],
+            status_meaning={k: v for k, v in STATUS_MEANING.items() if k in o["receipts_by_status"]},
             first_receipt_date=_day(o["first_receipt_date"]),
             latest_receipt_date=_day(o["latest_receipt_date"]),
             last_upload_date=_day(o["last_upload_at"]),

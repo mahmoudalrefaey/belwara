@@ -54,7 +54,7 @@ SEARCH_RESULTS_CAP: int = int(os.getenv("SEARCH_RESULTS_CAP", "50"))
 
 # ── Chat ──────────────────────────────────────────────────────────────────────
 CHAT_HISTORY_MESSAGES: int = int(os.getenv("CHAT_HISTORY_MESSAGES", "20"))
-CHAT_MAX_TOOL_STEPS: int = int(os.getenv("CHAT_MAX_TOOL_STEPS", "4"))
+CHAT_MAX_TOOL_STEPS: int = int(os.getenv("CHAT_MAX_TOOL_STEPS", "5"))
 
 # ── Plan quotas per calendar month (0 = unlimited) ────────────────────────────
 PLAN_LIMITS: dict = {

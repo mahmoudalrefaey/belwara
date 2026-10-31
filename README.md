@@ -115,19 +115,22 @@ Missing unit or line prices are filled from quantity. Per-item tax is `line_tota
 user message
      │
      ▼
- load last 20 messages of this thread (DB) + system prompt (today's date, main currency)
+ static system prompt + last 20 messages of this thread (DB) + user message
+ + context message (today's date, main currency, reply language)
      │
      ▼
  ┌─ model call ──────────────────────────────┐
  │   wants data?  ──yes──▶ run tool(s) in code ─▶ feed JSON results back ─┐
  │        │ no                                                            │
- │        ▼                                  (at most 4 steps; the last step has tools disabled)
+ │        ▼                                  (at most 5 steps; the last step has tools disabled)
  │   final answer ◀──────────────────────────────────────────────────────┘
  └───────────────────────────────────────────┘
      │
      ▼
  save user + assistant messages ─▶ return {reply, thread_id}
 ```
+
+The system prompt and tool specs never change, so they form a prefix the model provider can cache; everything per-request goes in the context message after the user's message. The reply language is decided from which script most words of the message are in (a shop name in Arabic inside an English question doesn't make it Arabic), and the prompt asks for the same register (Egyptian, Gulf, MSA, English, Franco). Behaviour rules the prompt sets, beyond scope and voice: work out the period, level and currency first; state only numbers that appear in a tool result (totals, daily averages, differences, percentages and conversions all have a tool field); use sort options for "biggest", "latest", "cheapest"; read every result's status (say what was searched when nothing matched and where data does exist, ask or report separately when merchants are ambiguous, say which stored name a match was found under, never surface errors); mention review state, missing totals or approximate conversions when they matter to the answer; ask a question only when the answer depends on it; never claim to have changed data. Each turn logs its rounds, tool calls, tokens and latency.
 
 ### Tools
 

@@ -15,6 +15,11 @@ from app.services.chat_service import _language_hint
         ("sraft kam f akher fatoora?", "Franco"),
         ("ana 3ayez a3raf masrofaty", "Franco"),
         ("?!", "language the user has been using"),
+        # A shop name in the other script doesn't change the language of the message.
+        ("How much did I spend at فتح الله ماركت?", "English"),
+        ("صرفت كام في Seoudi Market؟", "Arabic"),
+        ("كام في Vodafone Egypt", "Arabic"),
+        ("sraft kam f كبدة علاء?", "Franco"),
     ],
 )
 def test_language_hint(message, expected):

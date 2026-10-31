@@ -98,7 +98,9 @@ def tool_numbers(trace: Iterable[dict]) -> Dict[Decimal, Set[Optional[str]]]:
     def add(value, currency):
         d = _to_decimal(str(value)) if not isinstance(value, bool) else None
         if d is not None:
-            found.setdefault(d.quantize(CENT, rounding=ROUND_HALF_UP), set()).add(currency)
+            # A sign may be said in words ("41.96% less" for -41.96), so the magnitude counts too.
+            for v in {d, abs(d)}:
+                found.setdefault(v.quantize(CENT, rounding=ROUND_HALF_UP), set()).add(currency)
 
     def walk(node, currency):
         if isinstance(node, dict):
