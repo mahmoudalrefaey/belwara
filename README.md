@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="brand/logo/logo-full-on-dark.png">
-    <img src="brand/logo/logo-full-on-light.png" alt="بالورقة · Bel War’a" width="340">
-  </picture>
+  <img src="docs/banner.png" alt="بالورقة · Bel War’a — Payday came… and flew away? Snap your receipts and Wara’a shows you where it all went." width="100%">
 </p>
 
 <p align="center">
@@ -93,18 +90,30 @@ Full instructions are in [Local setup](#local-setup).
 
 There are three user-facing flows. They share one PostgreSQL database and one Azure OpenAI client.
 
-```
-                        ┌───────────────────────────── Next.js frontend ─────────────────────────────┐
-                        │  Dashboard      Receipts (upload, review, edit)      Chat      Profile     │
-                        └───────┬───────────────────┬──────────────────────────┬───────────────┬─────┘
-                                │ JWT               │                          │               │
-                        ┌───────▼───────────────────▼──────────────────────────▼───────────────▼─────┐
-                        │                              FastAPI                                       │
-                        │  upload_service   extract_service   receipt_service   chat_service  quota  │
-                        └───┬──────────────────┬───────────────────┬──────────────────┬──────────────┘
-                            │                  │                   │                  │
-                     Azure Blob Storage   Azure OpenAI        PostgreSQL        Azure OpenAI
-                     (original files)     (vision, 1 call)    (all data)        (chat + tools)
+```mermaid
+flowchart TB
+    subgraph FE["Next.js frontend"]
+        direction LR
+        D[Dashboard]
+        R["Receipts<br/>upload · review · edit"]
+        C[Chat]
+        P[Profile]
+    end
+
+    subgraph API["FastAPI"]
+        direction LR
+        US[upload_service]
+        ES[extract_service]
+        RS[receipt_service]
+        CS[chat_service]
+        Q[quota]
+    end
+
+    FE -- "JWT" --> API
+    US --> BLOB[("Azure Blob Storage<br/>original files")]
+    ES --> AOV["Azure OpenAI<br/>vision, 1 call"]
+    RS --> PG[("PostgreSQL<br/>all data")]
+    CS --> AOC["Azure OpenAI<br/>chat + tools"]
 ```
 
 | Flow | In one sentence |
@@ -117,25 +126,19 @@ There are three user-facing flows. They share one PostgreSQL database and one Az
 
 ## Receipt lifecycle
 
-```
-POST /receipts/upload
-        │  validate type and size, check monthly quota
-        ▼
-  file saved to storage  ──▶  receipt row created: status = processing  ──▶  HTTP 202 returned
-                                        │
-                                        │  background task (FastAPI BackgroundTasks)
-                                        ▼
-                      load file ─▶ prepare pages ─▶ ONE vision call (structured output)
-                                        │
-                                        ▼
-                         deterministic checks (build_receipt_data)
-                         ┌──────────────┴──────────────┐
-                    no problems                  one or more reasons
-                         │                              │
-                  status = ready              status = needs_review
-                                                  (review_reasons lists why)
-
-   model error / unreadable file / not a receipt  ──▶  status = failed (reason stored)
+```mermaid
+flowchart TD
+    U["POST /receipts/upload"] --> V{"valid type and size?<br/>monthly quota left?"}
+    V -- no --> E["400 / 402"]
+    V -- yes --> S["file saved to storage"]
+    S --> ROW["receipt row: status = processing"]
+    ROW --> A["HTTP 202 returned"]
+    ROW -. background task .-> L["load file → prepare pages"]
+    L --> M["ONE vision call<br/>structured output"]
+    M --> CHK{"deterministic checks<br/>build_receipt_data"}
+    CHK -- "no problems" --> READY(["status = ready"])
+    CHK -- "one or more reasons" --> NR(["status = needs_review<br/>review_reasons lists why"])
+    M -- "model error · unreadable · not a receipt" --> F(["status = failed<br/>reason stored"])
 ```
 
 ### Extraction (`app/services/extract_service.py`)
@@ -176,23 +179,28 @@ Currency codes are validated against ISO 4217 (`app/core/currencies.py`) when a 
 
 ## The spending assistant
 
-```
-user message
-     │
-     ▼
- static system prompt + last 20 messages of this thread (DB) + user message
- + context message (today's date, main currency, reply language)
-     │
-     ▼
- ┌─ model call ──────────────────────────────┐
- │   wants data?  ──yes──▶ run tool(s) in code ─▶ feed JSON results back ─┐
- │        │ no                                                            │
- │        ▼                                  (at most 5 steps; the last step has tools disabled)
- │   final answer ◀──────────────────────────────────────────────────────┘
- └───────────────────────────────────────────┘
-     │
-     ▼
- save user + assistant messages ─▶ return {reply, thread_id}
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant API as chat_service
+    participant DB as PostgreSQL
+    participant LLM as Azure OpenAI
+    participant Tools as Tools (code)
+
+    User->>API: message
+    API->>DB: last 20 messages of this thread
+    API->>LLM: static system prompt + history + message<br/>+ context (today, main currency, reply language)
+    loop at most 5 steps (the last step has tools disabled)
+        LLM-->>API: tool call(s)
+        API->>Tools: run with typed arguments (user_id bound in code)
+        Tools->>DB: SQL scoped to the user
+        Tools-->>API: JSON envelope (status, data, limitations)
+        API->>LLM: tool results
+    end
+    LLM-->>API: final answer
+    API->>DB: save user + assistant messages
+    API-->>User: reply, thread_id, receipt cards, pending actions
 ```
 
 The system prompt and tool specs never change, so they form a prefix the model provider can cache; everything per-request goes in the context message after the user's message. The reply language is decided from which script most words of the message are in (a shop name in Arabic inside an English question doesn't make it Arabic), and the prompt asks for the same register (Egyptian, Gulf, MSA, English, Franco). Behaviour rules the prompt sets, beyond scope and voice: work out the period, level and currency first; state only numbers that appear in a tool result (totals, daily averages, differences, percentages and conversions all have a tool field); use sort options for "biggest", "latest", "cheapest"; read every result's status (say what was searched when nothing matched and where data does exist, ask or report separately when merchants are ambiguous, say which stored name a match was found under, never surface errors); mention review state, missing totals or approximate conversions when they matter to the answer; ask a question only when the answer depends on it; prepare changes with `propose_action` and never claim a change is done before the user confirms it. Each turn logs its rounds, tool calls, tokens and latency.
@@ -231,6 +239,22 @@ Every tool returns an envelope: `status` (`ok`, `no_results`, `ambiguous`, `erro
 
 Wara'a can prepare three changes to one receipt: set its category, mark a flagged receipt as reviewed, or delete it (`app/services/action_service.py`). Anything else (amounts, items, names) it sends to "Fix details".
 
+```mermaid
+stateDiagram-v2
+    [*] --> pending: propose_action (changes nothing)
+    pending --> done: user taps Confirm (locked, one transaction)
+    pending --> cancelled: user taps Cancel
+    pending --> expired: after 24 hours (410)
+    pending --> stale: receipt edited or deleted since (409)
+    pending --> failed: applying fails (rolled back)
+    done --> done: repeat confirm returns the same result
+    done --> [*]
+    cancelled --> [*]
+    expired --> [*]
+    stale --> [*]
+    failed --> [*]
+```
+
 - **Proposing changes nothing.** `propose_action` checks that the receipt is the user's and the change makes sense now (not still processing; the category is different; a receipt being marked reviewed has merchant, date, total and a real currency). It stores a `pending` row in `chat_actions` with a snapshot of the receipt's `updated_at`, and replaces any older pending change of the same kind to the same receipt. The reply carries the action, and the chat shows a card with Confirm and Cancel.
 - **Confirming runs once, in one transaction.** `POST /chat/actions/{id}/confirm` locks the action row (`SELECT … FOR UPDATE`, scoped to the user: someone else's action is a 404), requires `pending`, rejects it after 24 hours (`expired`, 410), locks the receipt and rejects the change if the receipt was edited or deleted since it was proposed (`stale`, 409). It applies the change and marks the action `done` in the same commit. A second confirm (double tap, retry, a concurrent request) waits on the lock, sees `done`, and returns the same result without doing anything. If applying fails, everything rolls back and the action is `failed` with no internal details in the response. A deleted receipt's photo is removed after the commit.
 - **Wara'a never reports a change it didn't see.** What the card says after a tap comes from the server's answer. The prompt forbids claiming a change is done, and the history the model sees on later turns carries each action's real status ("waiting for the user to confirm", "done — the user confirmed it", "expired unconfirmed — nothing changed").
@@ -263,15 +287,46 @@ Conversations live in `chat_messages` (user, thread, role, content, attachments)
 
 ## Data model
 
-```
-users ──< receipt ──< receipt_items
-  │
-  ├──< chat_messages        (user_id, thread_id, role, content, attachments)
-  ├──< chat_actions         (user_id, thread_id, message_id, kind, receipt_id, payload, status, expires_at)
-  └──< llm_usage            (user_id, kind, deployment, input_tokens, output_tokens)
+```mermaid
+erDiagram
+    users ||--o{ receipt : owns
+    receipt ||--o{ receipt_items : contains
+    users ||--o{ chat_messages : writes
+    users ||--o{ chat_actions : confirms
+    users ||--o{ llm_usage : "is billed for"
 
-fx_rates                    (rate_date, currency, usd_rate) — historical exchange-rate cache
+    chat_messages {
+        int user_id
+        string thread_id
+        string role
+        text content
+        json attachments
+    }
+    chat_actions {
+        int user_id
+        string thread_id
+        int message_id
+        string kind
+        int receipt_id
+        json payload
+        string status
+        datetime expires_at
+    }
+    llm_usage {
+        int user_id
+        string kind
+        string deployment
+        int input_tokens
+        int output_tokens
+    }
+    fx_rates {
+        date rate_date
+        string currency
+        decimal usd_rate
+    }
 ```
+
+`fx_rates` is a shared historical exchange-rate cache, not owned by any user.
 
 All child tables use `ON DELETE CASCADE`, so deleting a user removes everything they own.
 
