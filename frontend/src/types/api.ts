@@ -146,10 +146,22 @@ export interface ChatReceiptCard {
   verification: "verified" | "extracted" | "needs_review" | null;
 }
 
+export interface ChatAction {
+  action_id: string;
+  kind: "set_category" | "mark_reviewed" | "delete_receipt";
+  receipt_id: number;
+  status: "pending" | "done" | "cancelled" | "expired" | "stale" | "failed" | string;
+  payload: { category?: string } | null;
+  summary: { merchant?: string | null; date?: string | null; total?: string | null; currency?: string | null } | null;
+  result: Record<string, unknown> | null;
+  expires_at: string;
+}
+
 export interface ChatResponse {
   reply: string;
   thread_id: string;
   receipts?: ChatReceiptCard[];
+  actions?: ChatAction[];
 }
 
 export interface ChatThreadSummary {
@@ -163,6 +175,7 @@ export interface ChatMessageOut {
   content: string;
   created_at: string;
   receipts?: ChatReceiptCard[];
+  actions?: ChatAction[];
 }
 
 /* ─── Client-side models ───────────────────────────────────────────── */
@@ -174,6 +187,7 @@ export interface ChatMessage {
   timestamp: string;
   thread_id?: string;
   receipts?: ChatReceiptCard[];
+  actions?: ChatAction[];
 }
 
 export interface UserPrefs {

@@ -133,7 +133,7 @@ user message
  save user + assistant messages ─▶ return {reply, thread_id}
 ```
 
-The system prompt and tool specs never change, so they form a prefix the model provider can cache; everything per-request goes in the context message after the user's message. The reply language is decided from which script most words of the message are in (a shop name in Arabic inside an English question doesn't make it Arabic), and the prompt asks for the same register (Egyptian, Gulf, MSA, English, Franco). Behaviour rules the prompt sets, beyond scope and voice: work out the period, level and currency first; state only numbers that appear in a tool result (totals, daily averages, differences, percentages and conversions all have a tool field); use sort options for "biggest", "latest", "cheapest"; read every result's status (say what was searched when nothing matched and where data does exist, ask or report separately when merchants are ambiguous, say which stored name a match was found under, never surface errors); mention review state, missing totals or approximate conversions when they matter to the answer; ask a question only when the answer depends on it; never claim to have changed data. Each turn logs its rounds, tool calls, tokens and latency.
+The system prompt and tool specs never change, so they form a prefix the model provider can cache; everything per-request goes in the context message after the user's message. The reply language is decided from which script most words of the message are in (a shop name in Arabic inside an English question doesn't make it Arabic), and the prompt asks for the same register (Egyptian, Gulf, MSA, English, Franco). Behaviour rules the prompt sets, beyond scope and voice: work out the period, level and currency first; state only numbers that appear in a tool result (totals, daily averages, differences, percentages and conversions all have a tool field); use sort options for "biggest", "latest", "cheapest"; read every result's status (say what was searched when nothing matched and where data does exist, ask or report separately when merchants are ambiguous, say which stored name a match was found under, never surface errors); mention review state, missing totals or approximate conversions when they matter to the answer; ask a question only when the answer depends on it; prepare changes with `propose_action` and never claim a change is done before the user confirms it. Each turn logs its rounds, tool calls, tokens and latency.
 
 ### Tools
 
@@ -147,6 +147,7 @@ Every tool returns an envelope: `status` (`ok`, `no_results`, `ambiguous`, `erro
 | `find_items` | query (+ alternatives), merchant (+ alternatives), start, end, mode (list / summary), sort (newest / highest_price / highest_total), limit | purchases, or per item: times bought, total quantity and total spent |
 | `account_overview` | — | receipts by status (including failed and processing), first and latest receipt dates, currencies, receipts that need review and why |
 | `show_receipts` | receipt_ids (1–5) | attaches the user's own receipts to the reply as cards |
+| `propose_action` | kind (set_category / mark_reviewed / delete_receipt), receipt_id, category | a pending change for the user to confirm, or why none is needed or possible; changes nothing |
 | `convert_currency` | amount, from, to | converted amount, rate basis and date |
 
 **Finding what people mean** (`app/services/match_service.py`). Merchant and item names are typed by people and stored by OCR, so they rarely match exactly. Every tool that takes a name resolves it against the user's own stored names in layers: exact, then normalized (one form per Arabic letter, no diacritics or tatweel, Western digits, case and accents folded), then "contains" (every word typed appears in the stored name), then fuzzy. Fuzzy matching aligns words by edit distance on the normalized text and on an OCR *skeleton* where letters that print alike are folded together (ب ت ث ن ي, ج ح خ, ع غ ف ق …), so a stored "حواوشى فلاء" is found for "حواوشي علاء" while "حلواني علاء" is not. Words the person typed that the stored name lacks count against it, except business words like مطعم or "store". Stored spellings of one merchant are clustered, so a breakdown by merchant shows one row with its other spellings listed. When two different merchants match about equally well (a shared first name, say), the tool returns `ambiguous` with each one's figures and the assistant asks or reports them separately; a period or category can settle it when only one has receipts there. Below the bar, nothing is returned except "nearest" names. Stored names are never rewritten. The model may pass `alternatives` (the name in the other script, a transliteration, a synonym such as فلافل for طعمية); that is the model's language knowledge, not a dictionary in the code. Thresholds are calibrated on the dev pool of `evals/run_retrieval.py` and checked on the holdout pool (100% hits on exact, typed and typo queries, 0% confident wrong matches). *Limits:* names written only in another script are found only if the model offers the alternative; very short words (four letters or fewer) must match exactly or as an OCR look-alike, so a one-letter typo in a short name is missed; scoring runs in Python over the user's distinct names (a few hundred ms at ~2,000 names), and larger accounts would need a `pg_trgm` prefilter.
@@ -163,6 +164,15 @@ Every tool returns an envelope: `status` (`ok`, `no_results`, `ambiguous`, `erro
 - Only `ready` and `needs_review` receipts count in totals. `processing` and `failed` receipts are excluded, and receipts without a readable total are counted separately instead of skewing averages.
 - Currencies are never mixed: totals are per currency, ranking by amount happens within a currency, and a single figure across currencies only comes from a conversion that states its basis.
 - A tool error comes back as `{"status": "error", "error": {code, retryable}}` without internal details, and the database session is rolled back so one failure can't poison the rest of the turn.
+
+### Changes from the chat, only on the user's tap
+
+Wara'a can prepare three changes to one receipt: set its category, mark a flagged receipt as reviewed, or delete it (`app/services/action_service.py`). Anything else (amounts, items, names) it sends to "Fix details".
+
+- **Proposing changes nothing.** `propose_action` checks that the receipt is the user's and the change makes sense now (not still processing; the category is different; a receipt being marked reviewed has merchant, date, total and a real currency). It stores a `pending` row in `chat_actions` with a snapshot of the receipt's `updated_at`, and replaces any older pending change of the same kind to the same receipt. The reply carries the action, and the chat shows a card with Confirm and Cancel.
+- **Confirming runs once, in one transaction.** `POST /chat/actions/{id}/confirm` locks the action row (`SELECT … FOR UPDATE`, scoped to the user: someone else's action is a 404), requires `pending`, rejects it after 24 hours (`expired`, 410), locks the receipt and rejects the change if the receipt was edited or deleted since it was proposed (`stale`, 409). It applies the change and marks the action `done` in the same commit. A second confirm (double tap, retry, a concurrent request) waits on the lock, sees `done`, and returns the same result without doing anything. If applying fails, everything rolls back and the action is `failed` with no internal details in the response. A deleted receipt's photo is removed after the commit.
+- **Wara'a never reports a change it didn't see.** What the card says after a tap comes from the server's answer. The prompt forbids claiming a change is done, and the history the model sees on later turns carries each action's real status ("waiting for the user to confirm", "done — the user confirmed it", "expired unconfirmed — nothing changed").
+- Confirming doesn't use a chat question from the monthly quota. Deleting a conversation deletes its actions; the data export lists them.
 
 ### History
 
@@ -195,6 +205,7 @@ Conversations live in `chat_messages` (user, thread, role, content, attachments)
 users ──< receipt ──< receipt_items
   │
   ├──< chat_messages        (user_id, thread_id, role, content, attachments)
+  ├──< chat_actions         (user_id, thread_id, message_id, kind, receipt_id, payload, status, expires_at)
   └──< llm_usage            (user_id, kind, deployment, input_tokens, output_tokens)
 
 fx_rates                    (rate_date, currency, usd_rate) — historical exchange-rate cache
@@ -325,8 +336,9 @@ All routes except register, login and `/health` need `Authorization: Bearer <tok
 | POST | `/receipts/{id}/reprocess` | Re-run extraction on a `failed` or `needs_review` receipt |
 | GET | `/receipts/{id}/image` | The original upload (owner only) |
 | DELETE | `/receipts` | Delete all; body `{"confirm": "DELETE_ALL_RECEIPTS"}` |
-| POST | `/chat` | `{message, thread_id?}` → `{reply, thread_id, receipts}` (receipt cards attached to the reply) |
-| GET | `/chat/threads`, `/chat/threads/{id}` | Conversation list and messages (with their receipt cards) |
+| POST | `/chat` | `{message, thread_id?}` → `{reply, thread_id, receipts, actions}` (receipt cards and pending changes attached to the reply) |
+| GET | `/chat/threads`, `/chat/threads/{id}` | Conversation list and messages (with their receipt cards and actions) |
+| POST | `/chat/actions/{id}/confirm`, `/chat/actions/{id}/cancel` | Carry out or drop a change Wara'a prepared; `409` with `{status}` when it's stale, cancelled or failed, `410` when expired |
 | GET | `/health` | Liveness probe |
 
 Error responses worth handling in clients: `402` quota reached, `429` rate limited, `503` assistant temporarily unavailable.

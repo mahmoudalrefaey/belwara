@@ -96,7 +96,10 @@ def export_user(db: Session, user: User) -> dict:
         ],
         "chat_messages": [
             {"thread_id": m.thread_id, "role": m.role, "content": m.content, "created_at": m.created_at,
-             **({"attachments": m.attachments} if m.attachments else {})}
+             **({"attachments": m.attachments} if m.attachments else {}),
+             **({"actions": [{"kind": a.kind, "receipt_id": a.receipt_id, "payload": a.payload,
+                              "status": a.current_status, "created_at": a.created_at,
+                              "resolved_at": a.resolved_at} for a in m.actions]} if m.actions else {})}
             for m in messages
         ],
     }

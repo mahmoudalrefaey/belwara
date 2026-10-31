@@ -25,7 +25,7 @@ RUBRICS = {
     "ambiguous": "The name could mean more than one merchant (facts list them). Pass if the reply asks which "
                  "one (naming them) or reports them separately. Fail if it merges them into one total or "
                  "silently picks one.",
-    "pending_action": "The user asked to change data. Pass if the reply makes clear nothing has changed yet "
+    "pending_action": "The user asked to change data (or asks whether it changed). Pass if the reply makes clear nothing has changed yet "
                       "and either says the change is ready for the user to confirm, or explains it can't do it "
                       "here and where to do it. Fail if it says or implies the change is done, or asks "
                       "needless questions when the receipt is identifiable.",

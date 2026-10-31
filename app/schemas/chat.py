@@ -28,10 +28,27 @@ class ChatReceiptCard(BaseModel):
     verification: Optional[str] = None
 
 
+class ChatActionOut(BaseModel):
+    """A change Wara'a prepared; only POST /chat/actions/{action_id}/confirm carries it out."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    action_id: str
+    kind: Literal["set_category", "mark_reviewed", "delete_receipt"]
+    receipt_id: int
+    # pending | done | cancelled | expired | stale | failed
+    status: str = Field(validation_alias="current_status")
+    payload: Optional[dict] = None
+    summary: Optional[dict] = None
+    result: Optional[dict] = None
+    expires_at: datetime
+
+
 class ChatResponse(BaseModel):
     reply: str
     thread_id: str
     receipts: List[ChatReceiptCard] = []
+    actions: List[ChatActionOut] = []
 
 
 class ChatThreadSummary(BaseModel):
@@ -47,3 +64,4 @@ class ChatMessageOut(BaseModel):
     content: str
     created_at: datetime
     receipts: List[ChatReceiptCard] = []
+    actions: List[ChatActionOut] = []

@@ -15,5 +15,10 @@ for key, value in {
     "CHAT_DEPLOYMENT": "chat-test",
     "JWT_SECRET_KEY": "test",
     "AZURE_STORAGE_CONNECTION_STRING": "",
+    # Per-IP limits would trip on a test suite that logs in dozens of times a minute.
+    "RATE_LIMIT_REGISTER_PER_MINUTE": "0",
+    "RATE_LIMIT_LOGIN_PER_MINUTE": "0",
+    "RATE_LIMIT_UPLOAD_PER_MINUTE": "0",
+    "RATE_LIMIT_CHAT_PER_MINUTE": "0",
 }.items():
     os.environ[key] = value

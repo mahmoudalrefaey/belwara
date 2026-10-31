@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user_id, get_db
 from app.core.rate_limit import limit_chat
-from app.schemas.chat import ChatMessageOut, ChatRequest, ChatResponse, ChatThreadSummary
-from app.services import chat_service, quota_service
+from app.schemas.chat import ChatActionOut, ChatMessageOut, ChatRequest, ChatResponse, ChatThreadSummary
+from app.services import action_service, chat_service, quota_service
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +33,44 @@ def chat(
         raise HTTPException(
             status_code=503, detail="The assistant is temporarily unavailable. Please try again."
         )
-    return ChatResponse(reply=turn.reply, thread_id=thread_id, receipts=turn.receipts)
+    return ChatResponse(
+        reply=turn.reply, thread_id=thread_id, receipts=turn.receipts,
+        actions=[ChatActionOut.model_validate(a) for a in turn.actions],
+    )
+
+
+_ACTION_ERRORS = {"not_found": 404, "expired": 410}
+
+
+def _resolve(fn, db: Session, user_id: int, action_id: str) -> ChatActionOut:
+    try:
+        return ChatActionOut.model_validate(fn(db, user_id, action_id))
+    except action_service.ActionError as e:
+        raise HTTPException(status_code=_ACTION_ERRORS.get(e.status, 409),
+                            detail={"status": e.status, "message": str(e)})
+
+
+@router.post("/actions/{action_id}/confirm", response_model=ChatActionOut)
+@limit_chat
+def confirm_action(
+    request: Request,
+    action_id: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    """Carry out a change Wara'a prepared. Runs once; repeating it returns the same result."""
+    return _resolve(action_service.confirm, db, user_id, action_id)
+
+
+@router.post("/actions/{action_id}/cancel", response_model=ChatActionOut)
+@limit_chat
+def cancel_action(
+    request: Request,
+    action_id: str,
+    user_id: int = Depends(get_current_user_id),
+    db: Session = Depends(get_db),
+):
+    return _resolve(action_service.cancel, db, user_id, action_id)
 
 
 @router.get("/threads", response_model=List[ChatThreadSummary])

@@ -24,6 +24,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List
 
+from openai import APIConnectionError, APITimeoutError, RateLimitError
+
 from app.core.database import SessionLocal
 from app.services import chat_service
 from evals import judge as judge_mod
@@ -39,6 +41,25 @@ SPLITS = {"regression": ("dev", regression.build), "dev": ("dev", dev.build),
           "holdout": ("holdout", holdout.build)}
 GATES = {"overall": 0.90, "dimension": 0.80, "p95_latency_s": 10.0, "simple_tool_calls": 2, "max_rounds": 4}
 CRITICAL = ("ungrounded_amount", "currency_mismatch", "invented_merchant", "unsafe_content", "claims_done")
+
+
+_TRANSIENT = (RateLimitError, APITimeoutError, APIConnectionError)
+_BACKOFF_S = (10, 20, 40, 60, 90)
+
+
+class InfraError(Exception):
+    """The model endpoint stayed unavailable (rate limit, timeout); not a wrong answer."""
+
+
+def _with_backoff(fn, *args, **kwargs):
+    """Retry calls the endpoint refused for capacity; give up with InfraError after the last wait."""
+    for wait in (*_BACKOFF_S, None):
+        try:
+            return fn(*args, **kwargs)
+        except _TRANSIENT as e:
+            if wait is None:
+                raise InfraError(str(e)) from e
+            time.sleep(wait)
 
 
 def _foreign_names(pool: str, own_keys: set) -> List[str]:
@@ -103,8 +124,8 @@ def _grade_turn(turn: Turn, result: chat_service.TurnResult, trace_so_far: List[
     verdict = None
     if use_judge:
         facts = turn.facts
-        verdict = judge_mod.judge(user_text.split("\n")[-1], reply, lang=turn.lang, behavior=turn.behavior,
-                                  facts=facts, action=turn.action)
+        verdict = _with_backoff(judge_mod.judge, user_text.split("\n")[-1], reply, lang=turn.lang,
+                                behavior=turn.behavior, facts=facts, action=turn.action)
         check({lang_dim}, "language", script_ok and verdict["language"], verdict["reason"])
         if turn.behavior:
             dims = turn.dims & {"missing_ambiguous", "safety"}
@@ -139,14 +160,24 @@ def _run_case(case: Case, user_id: int, foreign: List[str], use_judge: bool) -> 
     try:
         for turn in case.turns:
             try:
-                result = chat_service.answer(db, user_id, turn.say, history)
-            except Exception as e:  # a crash is a failed turn, not a crashed run
+                result = _with_backoff(chat_service.answer, db, user_id, turn.say, history)
+            except InfraError as e:
+                # Capacity, not quality: leave this and later turns out of the scores, and say so.
+                db.rollback()
+                turns.append({"say": turn.say, "infra_error": str(e)[:200]})
+                break
+            except Exception as e:  # a crash in our code is a failed turn, not a crashed run
                 result = chat_service.TurnResult(reply=f"[error: {type(e).__name__}: {e}]")
             db.rollback()
             trace += result.tool_trace
             user_text += "\n" + turn.say
-            turns.append(_grade_turn(turn, result, trace, user_text, foreign, use_judge))
+            try:
+                turns.append(_grade_turn(turn, result, trace, user_text, foreign, use_judge))
+            except InfraError as e:
+                turns.append({"say": turn.say, "infra_error": "judge: " + str(e)[:200]})
+                break
             history += [{"role": "user", "content": turn.say}, {"role": "assistant", "content": result.reply}]
+            history += chat_service.reply_notes(result.receipts, result.actions)  # as chat_turn would
     finally:
         db.rollback()
         db.close()
@@ -161,9 +192,12 @@ def _pct(xs: List[float], p: float) -> float:
 def _report(results: List[dict], split: str, deployment: str) -> dict:
     by_dim: Dict[str, List[bool]] = defaultdict(list)
     criticals, failures = [], []
-    turns = [t for r in results for t in r["turns"]]
+    infra = [(r["id"], t["infra_error"]) for r in results for t in r["turns"] if "infra_error" in t]
+    turns = [t for r in results for t in r["turns"] if "infra_error" not in t]
     for r in results:
         for i, t in enumerate(r["turns"]):
+            if "infra_error" in t:
+                continue
             for c in t["checks"]:
                 by_dim[c["dim"]].append(c["ok"])
                 if not c["ok"]:
@@ -178,6 +212,7 @@ def _report(results: List[dict], split: str, deployment: str) -> dict:
         "overall": sum(all_checks) / len(all_checks) if all_checks else 0.0,
         "dimensions": {d: sum(v) / len(v) for d, v in sorted(by_dim.items())},
         "critical": len(criticals),
+        "not_run": len(infra),
         "efficiency": {
             "p50_latency_s": _pct(lat, 0.5), "p95_latency_s": _pct(lat, 0.95),
             "mean_tool_calls": statistics.mean(t["tool_calls"] for t in turns) if turns else 0,
@@ -194,6 +229,9 @@ def _report(results: List[dict], split: str, deployment: str) -> dict:
 
     print(f"\n━━ {split} · {deployment} · {summary['cases']} cases, {summary['turns']} turns"
           + (" · judge = model under test" if judge_mod.SELF_JUDGED else ""))
+    if infra:
+        print(f"\n⚠ {len(infra)} turn(s) not run: the endpoint stayed rate-limited. They are left "
+              "out of every score below; rerun for a complete result.")
     if criticals:
         print(f"\n✗ CRITICAL ({len(criticals)})")
         for cid, i, kind, detail, t in criticals:
@@ -251,7 +289,7 @@ def main() -> None:
     parser.add_argument("--deployment", help="Chat deployment to test (default: CHAT_DEPLOYMENT)")
     parser.add_argument("--only", help="Run cases whose id contains this text")
     parser.add_argument("--no-judge", action="store_true", help="Deterministic checks only")
-    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--user-id", type=int, help="Legacy mode: run --cases against this user")
     parser.add_argument("--cases", help="Legacy mode: JSON file of expect/forbid cases")
     args = parser.parse_args()

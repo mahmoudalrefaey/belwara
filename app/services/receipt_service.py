@@ -82,11 +82,16 @@ def update_receipt(db: Session, receipt: Receipt, payload: ReceiptUpdate) -> Rec
         setattr(receipt, key, value)
     if payload.items is not None:
         receipt.items = [ReceiptItem(**item.model_dump()) for item in payload.items]
+    mark_confirmed(receipt)
+    db.commit()
+    return get_receipt_by_id(db, receipt.receipt_id, receipt.user_id)
+
+
+def mark_confirmed(receipt: Receipt) -> None:
+    """The user vouched for the values: ready, no review reasons, verified now (caller commits)."""
     receipt.status = STATUS_READY
     receipt.review_reasons = None
     receipt.confirmed_at = datetime.now(timezone.utc)
-    db.commit()
-    return get_receipt_by_id(db, receipt.receipt_id, receipt.user_id)
 
 
 # Orderings the chat can ask for; the REST list keeps "recently_uploaded".

@@ -1,6 +1,7 @@
 """SQLAlchemy ORM model for persisted chat history."""
 
 from sqlalchemy import JSON, BigInteger, Column, DateTime, ForeignKey, Index, String, Text, func
+from sqlalchemy.orm import relationship
 
 from app.core.database import Base
 
@@ -22,6 +23,11 @@ class ChatMessage(Base):
     # month's chat quota still counts the question (user rows) after deletion.
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     attachments = Column(JSON, nullable=True)  # {"receipts": [card, ...]} shown with an assistant reply
+
+    # Changes proposed with this reply, and what became of them. The database sets message_id to
+    # NULL when a message is deleted, so the ORM leaves those rows alone.
+    actions = relationship("ChatAction", order_by="ChatAction.created_at", lazy="selectin",
+                           passive_deletes="all")
 
     @property
     def receipts(self) -> list:

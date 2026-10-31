@@ -25,9 +25,10 @@ from PIL import Image  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from app.core.database import Base, SessionLocal, engine  # noqa: E402
-from app.models import ChatMessage, Receipt, ReceiptItem, User  # noqa: E402
+from app.models import ChatAction, ChatMessage, Receipt, ReceiptItem, User  # noqa: E402
 from app.models.usage import LlmUsage  # noqa: E402
 from app.services import (  # noqa: E402
+    action_service,
     chat_service,
     chat_tools,
     extract_service,
@@ -54,7 +55,8 @@ def clean(tmp_path, monkeypatch):
     monkeypatch.setattr(storage_service, "_LOCAL_DIR", tmp_path)
     with engine.begin() as conn:
         conn.execute(text(
-            "TRUNCATE users, receipt, receipt_items, chat_messages, llm_usage RESTART IDENTITY CASCADE"
+            "TRUNCATE users, receipt, receipt_items, chat_messages, chat_actions, llm_usage "
+            "RESTART IDENTITY CASCADE"
         ))
     yield
 
@@ -573,3 +575,206 @@ def test_receipt_cards_are_scoped_saved_and_noted_for_follow_ups(monkeypatch):
         notes = [m["content"] for m in calls[0]["messages"] if m["role"] == "system"]
         assert any(f"#{mine} Carrefour" in n for n in notes)
         assert "Secret Shop" not in json.dumps(calls[0]["messages"], ensure_ascii=False)
+
+
+# ── confirmed actions ───────────────────────────────────────────────────────
+
+def _propose(user_id, kind, receipt_id, category=None):
+    db = SessionLocal()
+    try:
+        tools = chat_tools.build_tools(db, user_id, actions=[])
+        out = json.loads(chat_tools.run_tool(db, tools, "propose_action", json.dumps(
+            {"kind": kind, "receipt_id": receipt_id, "category": category})))
+        db.commit()
+        return out
+    finally:
+        db.close()
+
+
+def _get(receipt_id, user_id):
+    db = SessionLocal()
+    try:
+        return receipt_service.get_receipt_by_id(db, receipt_id, user_id)
+    finally:
+        db.close()
+
+
+def test_proposing_changes_nothing_and_confirming_applies_once(monkeypatch):
+    from app.main import app
+
+    executed = []
+    real = action_service._execute
+
+    def counting(db, a, r):
+        executed.append(a.action_id)
+        return real(db, a, r)
+
+    monkeypatch.setattr(action_service, "_execute", counting)
+    with TestClient(app) as client:
+        h = _auth(client)
+        db = SessionLocal()
+        uid = db.query(User.user_id).filter(User.email == "a@x.com").scalar()
+        rid = _receipt(db, uid, "Uber", 30, category="groceries", status="needs_review")
+        db.close()
+
+        p = _propose(uid, "set_category", rid, "transport")
+        assert p["status"] == "pending_confirmation"
+        assert _get(rid, uid).category == "groceries"  # nothing changed yet
+
+        first = client.post(f"/chat/actions/{p['action_id']}/confirm", headers=h)
+        again = client.post(f"/chat/actions/{p['action_id']}/confirm", headers=h)
+        assert first.status_code == again.status_code == 200
+        assert first.json()["status"] == again.json()["status"] == "done"
+        assert executed == [p["action_id"]]  # the repeat changed nothing
+        r = _get(rid, uid)
+        assert r.category == "transport" and r.status == "needs_review"  # the category, nothing else
+
+        other = _auth(client, "b@x.com")
+        assert client.post(f"/chat/actions/{p['action_id']}/confirm", headers=other).status_code == 404
+        assert client.post(f"/chat/actions/{p['action_id']}/cancel", headers=h).status_code == 409
+
+
+def test_simultaneous_confirms_execute_once(monkeypatch):
+    import threading
+    import time as clock
+
+    executed = []
+    real = action_service._execute
+
+    def slow(db, a, r):
+        executed.append(a.action_id)
+        clock.sleep(0.3)  # hold the lock while the other request arrives
+        return real(db, a, r)
+
+    monkeypatch.setattr(action_service, "_execute", slow)
+    db = SessionLocal()
+    uid = _user(db, "a@x.com")
+    rid = _receipt(db, uid, "Shop", 10)
+    db.close()
+    p = _propose(uid, "delete_receipt", rid)
+    statuses = []
+
+    def go():
+        s = SessionLocal()
+        try:
+            statuses.append(action_service.confirm(s, uid, p["action_id"]).status)
+        finally:
+            s.close()
+
+    threads = [threading.Thread(target=go) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert statuses == ["done", "done"] and len(executed) == 1
+    assert _get(rid, uid) is None
+
+
+def test_expired_stale_failed_and_cancelled_changes_do_nothing(monkeypatch):
+    from app.main import app
+
+    with TestClient(app) as client:
+        h = _auth(client)
+        db = SessionLocal()
+        uid = db.query(User.user_id).filter(User.email == "a@x.com").scalar()
+        rid = _receipt(db, uid, "Shop", 10, category="groceries")
+        db.close()
+
+        expired = _propose(uid, "set_category", rid, "dining")
+        db = SessionLocal()
+        db.query(ChatAction).filter(ChatAction.action_id == expired["action_id"]).update(
+            {"expires_at": datetime.now(timezone.utc) - timedelta(minutes=1)})
+        db.commit()
+        db.close()
+        r = client.post(f"/chat/actions/{expired['action_id']}/confirm", headers=h)
+        assert r.status_code == 410 and r.json()["detail"]["status"] == "expired"
+
+        stale = _propose(uid, "set_category", rid, "dining")
+        assert client.patch(f"/receipts/{rid}", headers=h, json={"total_amount": 11}).status_code == 200
+        r = client.post(f"/chat/actions/{stale['action_id']}/confirm", headers=h)
+        assert r.status_code == 409 and r.json()["detail"]["status"] == "stale"
+
+        def boom(db, a, r):
+            r.category = "dining"
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(action_service, "_execute", boom)
+        broken = _propose(uid, "set_category", rid, "dining")
+        r = client.post(f"/chat/actions/{broken['action_id']}/confirm", headers=h)
+        assert r.status_code == 409 and r.json()["detail"]["status"] == "failed"
+        assert "disk full" not in r.text
+        assert _get(rid, uid).category == "groceries"  # the half-applied change was rolled back
+        monkeypatch.undo()
+
+        cancelled = _propose(uid, "delete_receipt", rid)
+        out = client.post(f"/chat/actions/{cancelled['action_id']}/cancel", headers=h).json()
+        assert out["status"] == "cancelled"
+        assert client.post(f"/chat/actions/{cancelled['action_id']}/confirm", headers=h).status_code == 409
+        assert _get(rid, uid) is not None
+
+
+def test_proposals_check_preconditions_and_replace_older_ones():
+    db = SessionLocal()
+    uid = _user(db, "a@x.com")
+    unreadable = _receipt(db, uid, None, 9, status="needs_review")
+    rid = _receipt(db, uid, "Shop", 10, category="groceries")
+    other = _receipt(db, _user(db, "b@x.com"), "Theirs", 5)
+    db.close()
+    assert _propose(uid, "mark_reviewed", unreadable)["status"] == "not_possible"  # no merchant yet
+    assert _propose(uid, "set_category", rid, "groceries")["status"] == "no_change"
+    assert _propose(uid, "delete_receipt", other)["status"] == "no_results"  # not this user's
+    first = _propose(uid, "set_category", rid, "dining")
+    second = _propose(uid, "set_category", rid, "shopping")
+    db = SessionLocal()
+    statuses = dict(db.query(ChatAction.action_id, ChatAction.status))
+    db.close()
+    assert statuses[first["action_id"]] == "cancelled" and statuses[second["action_id"]] == "pending"
+
+
+def test_chat_shows_pending_actions_and_remembers_what_happened(monkeypatch):
+    calls = []
+
+    def fake_create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            args = json.dumps({"kind": "delete_receipt", "receipt_id": rid, "category": None})
+            call = SimpleNamespace(id="c1", function=SimpleNamespace(name="propose_action", arguments=args))
+            return _completion(SimpleNamespace(content=None, tool_calls=[call]), "tool_calls")
+        return _completion(SimpleNamespace(content="Tap Confirm to delete it.", tool_calls=None))
+
+    monkeypatch.setattr(chat_service.client.chat.completions, "create", fake_create)
+    from app.main import app
+
+    with TestClient(app) as client:
+        h = _auth(client)
+        db = SessionLocal()
+        uid = db.query(User.user_id).filter(User.email == "a@x.com").scalar()
+        key = storage_service.save(uid, _png(), ".png")
+        r = Receipt(user_id=uid, status="ready", merchant_name="Shop", total_amount=Decimal(10),
+                    currency="EGP", image_key=key)
+        db.add(r)
+        db.commit()
+        rid = r.receipt_id
+        db.close()
+
+        body = client.post("/chat", headers=h, json={"message": "delete my Shop receipt"}).json()
+        [action] = body["actions"]
+        assert action["status"] == "pending" and action["kind"] == "delete_receipt"
+        assert _get(rid, uid) is not None
+        done = client.post(f"/chat/actions/{action['action_id']}/confirm", headers=h).json()
+        assert done["status"] == "done"
+        assert _get(rid, uid) is None
+        with pytest.raises(FileNotFoundError):
+            storage_service.load(key)  # the photo went with it
+
+        thread = client.get(f"/chat/threads/{body['thread_id']}", headers=h).json()
+        assert thread[1]["actions"][0]["status"] == "done"
+        calls.clear()
+        client.post("/chat", headers=h, json={"message": "did it work?", "thread_id": body["thread_id"]})
+        notes = " ".join(m["content"] for m in calls[0]["messages"] if m["role"] == "system")
+        assert f"receipt #{rid}" in notes and "done — the user confirmed it" in notes
+
+        assert client.delete(f"/chat/threads/{body['thread_id']}", headers=h).status_code == 204
+        db = SessionLocal()
+        assert db.query(ChatAction).count() == 0
+        db.close()

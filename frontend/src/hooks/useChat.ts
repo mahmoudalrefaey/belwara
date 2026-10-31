@@ -21,6 +21,7 @@ function toMessages(rows: ChatMessageOut[], threadId: string): ChatMessage[] {
     timestamp: m.created_at,
     thread_id: threadId,
     receipts: m.receipts ?? [],
+    actions: m.actions ?? [],
   }));
 }
 
@@ -117,6 +118,7 @@ export function useChat() {
             timestamp: new Date().toISOString(),
             thread_id: data.thread_id,
             receipts: data.receipts ?? [],
+            actions: data.actions ?? [],
           },
         ]);
         qc.invalidateQueries({ queryKey: ["chat-threads"] });

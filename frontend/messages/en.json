@@ -450,6 +450,24 @@
       "label": "Receipts in this answer",
       "unknownMerchant": "Unknown shop",
       "noDate": "No date"
+    },
+    "actions": {
+      "setCategory": "Change the category to {category}",
+      "markReviewed": "Mark this receipt as checked",
+      "delete": "Delete this receipt",
+      "unknownMerchant": "Unknown shop",
+      "confirm": "Confirm",
+      "cancel": "Cancel",
+      "nothingYet": "Nothing changes until you confirm",
+      "status": {
+        "pending": "Waiting for you",
+        "done": "Done.",
+        "cancelled": "Cancelled. Nothing changed.",
+        "expired": "This expired, so nothing changed. Ask Wara’a again.",
+        "stale": "The receipt changed since, so nothing was applied. Ask Wara’a again.",
+        "failed": "That didn’t work, and nothing changed. Try again.",
+        "not_found": "This change isn’t available anymore."
+      }
     }
   },
   "profile": {

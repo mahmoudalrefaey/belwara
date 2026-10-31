@@ -133,7 +133,7 @@ export function useDashboardData(currency: string | null) {
   });
 }
 
-function invalidateReceipts(qc: ReturnType<typeof useQueryClient>, receiptId?: number) {
+export function invalidateReceipts(qc: ReturnType<typeof useQueryClient>, receiptId?: number) {
   qc.invalidateQueries({ queryKey: ["receipts"] });
   qc.invalidateQueries({ queryKey: ["receipts-search"] });
   qc.invalidateQueries({ queryKey: ["dashboard"] });

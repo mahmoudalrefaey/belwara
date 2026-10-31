@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Optional
 from sqlalchemy.orm import Session
 
 from app.models.receipt import COUNTED_STATUSES, Receipt
-from app.services import fx_service, match_service, receipt_service
+from app.services import action_service, fx_service, match_service, receipt_service
 from app.services.receipt_service import money
 
 log = logging.getLogger(__name__)
@@ -167,6 +167,18 @@ TOOL_SPECS = [
         {"receipt_ids": {"type": "array", "items": {"type": "integer"}, "description": "1-5 receipt ids."}},
     ),
     _function(
+        "propose_action",
+        "Prepare a change to one receipt: set_category, mark_reviewed (the user says a flagged receipt "
+        "is right) or delete_receipt. Nothing changes until the user taps Confirm on the card that "
+        "appears under your reply. Find the exact receipt first (find_receipts).",
+        {
+            "kind": {"type": "string", "enum": ["set_category", "mark_reviewed", "delete_receipt"]},
+            "receipt_id": {"type": "integer"},
+            "category": _nullable("string", "New category for set_category, otherwise null.",
+                                  enum=[*_CATEGORIES, None]),
+        },
+    ),
+    _function(
         "convert_currency",
         "Convert one amount between currencies at the latest exchange rate.",
         {
@@ -307,13 +319,14 @@ def receipt_card(r: Receipt) -> dict:
 
 
 def build_tools(
-    db: Session, user_id: int, cards: Optional[List[dict]] = None
+    db: Session, user_id: int, cards: Optional[List[dict]] = None, actions: Optional[list] = None
 ) -> Dict[str, Callable[..., object]]:
     """
     Tool name → callable, each closed over this request's db session and user. `cards` collects the
-    receipt cards show_receipts attaches to this turn's reply.
+    receipt cards show_receipts attaches to this turn's reply; `actions` the changes it proposes.
     """
     cards = cards if cards is not None else []
+    actions = actions if actions is not None else []
 
     def _merchant(name, alternatives, start=None, end=None, category=None):
         """None when no merchant was given; otherwise which stored names the person means."""
@@ -584,6 +597,19 @@ def build_tools(
                    shown=[i for i in wanted if i in found],
                    note="The cards appear under your reply; there is no need to repeat their details.")
 
+    def propose_action(kind, receipt_id, category):
+        p = action_service.propose(db, user_id, kind=kind, receipt_id=int(receipt_id), category=category)
+        if p.status != "pending_confirmation":
+            return {"status": p.status, "reason": p.reason}
+        actions.append(p.action)
+        return {
+            "status": "pending_confirmation",
+            "action_id": p.action.action_id,
+            "receipt": {"receipt_id": p.action.receipt_id, **p.action.summary},
+            "note": "Nothing has changed yet. A card under your reply lets the user confirm or cancel; "
+                    "tell them that, and don't say it's done.",
+        }
+
     def convert_currency(amount, from_currency, to_currency):
         src, dst = from_currency.strip().upper(), to_currency.strip().upper()
         value = Decimal(str(amount))
@@ -606,6 +632,7 @@ def build_tools(
         "find_items": find_items,
         "account_overview": account_overview,
         "show_receipts": show_receipts,
+        "propose_action": propose_action,
         "convert_currency": convert_currency,
     }
 

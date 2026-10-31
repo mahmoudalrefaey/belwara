@@ -7,6 +7,7 @@ import { motion } from "framer-motion";
 import { Sparkles } from "lucide-react";
 import type { ChatMessage as ChatMessageType } from "@/types/api";
 import { LogoMark } from "@/components/brand/Logo";
+import { ChatActionCard } from "@/components/chat/ChatActionCard";
 import { ChatReceiptCards } from "@/components/chat/ChatReceiptCards";
 import { Link } from "@/i18n/navigation";
 import { useFormat } from "@/lib/format";
@@ -76,6 +77,7 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
           )}
         </div>
         {!isUser && message.receipts?.length ? <ChatReceiptCards receipts={message.receipts} /> : null}
+        {!isUser && message.actions?.map((a) => <ChatActionCard key={a.action_id} action={a} />)}
         <p className={cn("flex items-center gap-1.5 px-2 text-[11px] text-muted-foreground", isUser && "justify-end")}>
           {!isUser && (
             <>
