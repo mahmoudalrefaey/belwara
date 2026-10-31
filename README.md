@@ -1,9 +1,70 @@
-# بالورقة · Bel War’a
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo/logo-full-on-dark.png">
+    <img src="brand/logo/logo-full-on-light.png" alt="بالورقة · Bel War’a" width="340">
+  </picture>
+</p>
 
-Bel War’a (Egyptian Arabic for “on paper, to the letter”) turns photos and PDFs of receipts into structured spending history, then lets you explore that history on a dashboard or by asking questions in English or Arabic.
+<p align="center">
+  <b>Snap a receipt. Ask about your spending. In Arabic or English.</b><br>
+  صوّر الفاتورة، واسأل عن مصاريفك بالعربي أو بالإنجليزي.
+</p>
 
-- **Backend:** FastAPI, PostgreSQL, Azure OpenAI, Azure Blob Storage.
+<p align="center">
+  <a href="https://github.com/mahmoudalrefaey/belwara/actions/workflows/ci.yml"><img src="https://github.com/mahmoudalrefaey/belwara/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white" alt="Python 3.11 | 3.12">
+  <img src="https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/Next.js-000000?logo=nextdotjs&logoColor=white" alt="Next.js">
+  <img src="https://img.shields.io/badge/PostgreSQL-4169E1?logo=postgresql&logoColor=white" alt="PostgreSQL">
+  <img src="https://img.shields.io/badge/Azure%20OpenAI-0078D4?logo=microsoftazure&logoColor=white" alt="Azure OpenAI">
+</p>
+
+---
+
+Bel War’a (Egyptian Arabic for “on paper, to the letter”) turns photos and PDFs of receipts into structured spending history. You can explore that history on a dashboard, or ask **Wara'a**, the assistant, questions like *“صرفت كام في كارفور الشهر ده؟”* (“how much did I spend at Carrefour this month?”).
+
+## Highlights
+
+- **One vision call per receipt.** The model reads the image and returns typed JSON. There's no OCR-then-parse step, so the layout that separates a total from a cash-paid line survives.
+- **Doubtful receipts are flagged, never discarded.** Deterministic checks (line sums, taxes, dates, currency) send uncertain receipts to review, next to the original image.
+- **The model never does arithmetic or writes SQL.** It picks from 8 strict-schema tools; totals, averages and conversions are computed in code with exact decimals, and currencies are never mixed.
+- **Tenant isolation by construction.** `user_id` is bound per request, never a model argument, so a prompt injection can't reach another user's data.
+- **Changes only on the user's tap.** The assistant can propose a change. Applying it takes a confirm that runs once, in a locked transaction.
+- **Arabic-first.** An OCR-aware Arabic name matcher, replies in the user's register (Egyptian, Gulf, MSA, English, Franco), and an RTL interface.
+- **Measured, not assumed.** Eval suites for receipt extraction, chat answers and name matching, with a held-out split. See [Results](#results).
+
+## Results
+
+| What | Measured on | Result |
+|---|---|---|
+| Receipt total amount | 100 real receipts, mostly Egyptian Arabic, 2 runs each | **97.5%** correct |
+| Receipt date | same | **98.5%** correct |
+| Receipt currency | same, where a currency is printed | **100%** correct |
+| Extraction failures | 200 extraction calls | **0** |
+| Chat assistant, overall | 98 generated conversations, 327 turns, 3 splits | **93.7–95.2%** (93.7% on held-out) |
+| Chat latency | same | **p95 < 4 s** |
+| Merchant-name matching | held-out pool: exact, typed and misspelled queries | **100%** found, **0%** confident wrong matches |
+
+How these were measured, and their limits, is in [Testing and accuracy evaluation](#testing-and-accuracy-evaluation).
+
+## Quick start
+
+```bash
+cp .env.example .env                       # Postgres URL, JWT secret, Azure OpenAI endpoint and deployments
+uv sync && uv run alembic upgrade head
+uv run uvicorn app.main:app --reload       # API on http://127.0.0.1:8000/docs
+
+cd frontend && echo "NEXT_PUBLIC_API_URL=/api" > .env.local
+npm install && npm run dev                 # app on http://localhost:3000
+```
+
+Full instructions are in [Local setup](#local-setup).
+
+## Stack
+
+- **Backend:** FastAPI, PostgreSQL, Azure OpenAI (vision, structured outputs, tool calling) and Azure Blob Storage.
 - **Frontend:** Next.js (App Router), next-intl (Arabic by default, English), TanStack Query, Tailwind v4, shadcn/ui on Base UI and framer-motion. See [frontend/README.md](frontend/README.md).
+- **Ops:** Docker, GitHub Actions CI, and Azure Container Apps with managed identity and Application Insights.
 
 ---
 
@@ -276,7 +337,9 @@ evals/
 ├── grading.py · judge.py
 ├── run_chat.py          chat evals by split and dimension, with critical gates
 ├── run_retrieval.py     name-matching accuracy without the LLM
-└── run_receipts.py      extraction accuracy on real receipts
+├── run_receipts.py      extraction accuracy on real receipts against expected.json
+├── run_receipt_health.py  label-free reliability: failures, flags, arithmetic, run-to-run stability
+└── compare_labels.py    merge labels and human corrections, score a health run, list disagreements
 tests/                unit and integration tests
 frontend/             Next.js app (Arabic/English, RTL)
 Dockerfile · .github/workflows/ci.yml
@@ -371,6 +434,16 @@ The integration tests run the real SQL, storage, background jobs and HTTP layer 
 **Accuracy is measured, not assumed:**
 
 - `uv run python -m evals.run_receipts` runs real receipts from `evals/receipts/` against `expected.json` (see `evals/expected.example.json`). It prints per-field accuracy (merchant, date, total, currency, category, item count) and saves a result file. Run it before changing the model, the prompt or the schema, and compare against the saved baseline.
+- **Receipts without an answer key.** Real receipts rarely come with ground truth, so there are two more tools:
+
+  ```bash
+  uv run python -m evals.run_receipt_health --dir receipts_for_evals --runs 2   # needs no labels
+  uv run python -m evals.compare_labels                                         # score against labels
+  ```
+
+  - `run_receipt_health` reads every receipt N times and reports failed extractions, missing totals, review flags, printed totals that don't add up, fields that change between runs, and *silent risk*: receipts that look wrong by those signals but weren't flagged. The `date_too_old` rule is left out of the flag rate, because an archive of old receipts would trip it every time. Raw outputs are saved so labelling can reuse them.
+  - `compare_labels` merges labelled batches (`evals/results/labels/batch_*.json`) into `expected.json`, applies human verdicts from `labels/corrections.json` on top, and scores the latest health run. It lists every disagreement so a person can look at the image and settle it.
+  - **How the [Results](#results) receipt figures were made.** 100 real receipts, mostly Egyptian and Arabic, were labelled by a different model (Claude Sonnet) from the one under test (`gpt-4.1-mini`), without access to the app's output. A person then settled every disagreement on totals and dates; the label was right in 4 of the 5 disputes, and those verdicts are stored as corrections. Every extraction run is counted, so a field read correctly once and wrongly once counts as one hit and one miss. With 100 receipts, each figure is accurate to a few points. Merchant name isn't reported yet: the comparison is a strict string match, and OCR-style spelling variants count as misses. Making that comparison fair is the next step.
 - **Chat evals** run against generated users whose ground truth is known, so expected answers are computed, not typed in:
 
   ```bash
@@ -428,6 +501,7 @@ CI (`.github/workflows/ci.yml`) runs lint, all tests against a Postgres service,
 ## Known limitations of the assistant
 
 - **The judge grades itself.** Only `gpt-4.1-mini` (the model under test) and `gpt-4.1-nano` are deployed, so behaviour and register are judged by the same model. Hand review of failed verdicts found it wrong in both directions (it failed correct refusals and correct "approximately" conversions). Deterministic checks (numbers, currencies, tools, arguments, retrieval) don't depend on it. Set `EVAL_JUDGE_DEPLOYMENT` to a stronger deployment for trustworthy behaviour scores.
+- **Critical failures aren't at zero yet.** The target is no ungrounded amount, wrong currency or invented merchant on any turn; the latest held-out run had 3 such turns in 81. They are being fixed by class and re-checked on a fresh held-out seed.
 - **Exchange rates are today's.** Historical rates need a paid CurrencyFreaks plan. Every conversion says it is approximate and at today's rate, and the exact per-currency amounts are given first.
 - **Names in another script** (ماريوت for a receipt printed "Marriott") are found only when the model offers that spelling as an alternative; there is no transliteration in code.
 - **Short names** (four letters or fewer) match only exactly or as an OCR look-alike, so a one-letter typo in a short name is missed rather than risk a wrong merchant.
