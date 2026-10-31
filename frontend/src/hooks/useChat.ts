@@ -13,9 +13,27 @@ import type {
 
 export type ChatError = { kind: "quota" | "rate" | "generic"; detail?: string };
 
+function createMessageId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isChatResponse(value: unknown): value is ChatResponse {
+  if (!value || typeof value !== "object") return false;
+  const response = value as Partial<ChatResponse>;
+  return (
+    typeof response.reply === "string" &&
+    typeof response.thread_id === "string" &&
+    (response.receipts == null || Array.isArray(response.receipts)) &&
+    (response.actions == null || Array.isArray(response.actions))
+  );
+}
+
 function toMessages(rows: ChatMessageOut[], threadId: string): ChatMessage[] {
   return rows.map((m) => ({
-    id: crypto.randomUUID(),
+    id: createMessageId(),
     role: m.role,
     content: m.content,
     timestamp: m.created_at,
@@ -90,7 +108,7 @@ export function useChat() {
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: createMessageId(),
           role: "user",
           content,
           timestamp: new Date().toISOString(),
@@ -106,13 +124,16 @@ export function useChat() {
           { message: content, thread_id: threadId ?? undefined },
           { signal: abortRef.current.signal },
         );
+        if (!isChatResponse(data)) {
+          throw new Error("Invalid chat response");
+        }
 
         setThreadId(data.thread_id);
         localStorage.setItem(KEYS.thread, data.thread_id);
         setMessages((prev) => [
           ...prev,
           {
-            id: crypto.randomUUID(),
+            id: createMessageId(),
             role: "assistant",
             content: data.reply,
             timestamp: new Date().toISOString(),
